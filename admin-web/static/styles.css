@@ -550,7 +550,7 @@ h2 {
 .port-listener,
 .port-empty {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-columns: minmax(130px, .45fr) minmax(0, 1fr);
   align-items: center;
   gap: 10px;
   border: 1px solid var(--line);
@@ -571,6 +571,12 @@ h2 {
 .port-empty {
   color: var(--muted);
   font-size: 12px;
+}
+
+.port-listener small {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  text-align: right;
 }
 
 .port-listener.role-mtproxy { border-left: 4px solid var(--green); }
@@ -711,9 +717,15 @@ h2 {
   gap: 18px;
 }
 
+.grid-two > *,
+.panel,
+.dashboard-health-grid > * {
+  min-width: 0;
+}
+
 .service-grid {
   display: grid;
-  grid-template-columns: repeat(5, minmax(150px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(145px, 1fr));
   gap: 12px;
 }
 
@@ -863,6 +875,47 @@ h2 {
   overflow: hidden;
 }
 
+.chart-insights {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+  margin-bottom: 12px;
+}
+
+.chart-insight {
+  min-width: 0;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel-soft);
+  padding: 11px 12px;
+}
+
+.chart-insight span,
+.chart-insight small {
+  display: block;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.chart-insight strong {
+  display: block;
+  margin: 3px 0 1px;
+  font-size: 17px;
+}
+
+.chart-insight.explainer {
+  grid-column: 1 / -1;
+  border-style: dashed;
+}
+
+.chart-insight.series-proxy {
+  border-left: 4px solid var(--blue);
+}
+
+.chart-insight.series-site {
+  border-left: 4px solid var(--green);
+}
+
 .traffic-chart.is-hidden,
 .table-wrap.is-hidden {
   display: none;
@@ -925,6 +978,18 @@ h2 {
   font: 13px system-ui, sans-serif;
 }
 
+.traffic-chart .axis-value,
+.traffic-chart .axis-time {
+  fill: var(--muted);
+  font: 11px system-ui, sans-serif;
+}
+
+.traffic-chart .last-point {
+  stroke: var(--panel);
+  stroke-width: 3;
+  vector-effect: non-scaling-stroke;
+}
+
 .empty-chart,
 .empty {
   min-height: 160px;
@@ -965,10 +1030,60 @@ h2 {
 }
 
 .keys-summary {
-  margin-top: 14px;
   color: var(--muted);
   font-size: 12px;
   font-weight: 700;
+}
+
+.keys-dashboard,
+.backup-dashboard,
+.operations-strip {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.keys-dashboard,
+.backup-dashboard {
+  margin-top: 14px;
+}
+
+.operations-strip {
+  margin-bottom: 18px;
+}
+
+.summary-tile {
+  min-width: 0;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel-soft);
+  padding: 11px 12px;
+}
+
+.summary-tile span,
+.summary-tile small {
+  display: block;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.summary-tile strong {
+  display: block;
+  margin: 3px 0 1px;
+  overflow-wrap: anywhere;
+  font-size: 18px;
+}
+
+.summary-tile.good strong { color: var(--green); }
+.summary-tile.warn strong { color: var(--amber); }
+.summary-tile.bad strong { color: var(--red); }
+
+.keys-filter-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 12px;
 }
 
 .keys-list {
@@ -978,14 +1093,9 @@ h2 {
 
 .key-card {
   display: grid;
-  grid-template-columns:
-    minmax(150px, .85fr)
-    minmax(260px, 1.35fr)
-    minmax(200px, 1fr)
-    minmax(260px, 1.1fr)
-    minmax(210px, .9fr);
-  grid-template-areas: "user secret links traffic actions";
-  gap: 12px;
+  grid-template-columns: minmax(210px, .75fr) minmax(260px, 1fr) minmax(300px, 1.15fr);
+  grid-template-areas: "user traffic access";
+  gap: 0;
   align-items: stretch;
   min-width: 0;
   padding: 14px;
@@ -1007,30 +1117,67 @@ h2 {
 }
 
 .key-card-user,
-.key-card-secret,
-.key-card-links,
 .key-card-traffic,
-.key-card-actions {
+.key-card-access {
   display: grid;
   align-content: center;
-  gap: 8px;
+  gap: 10px;
   min-width: 0;
+  padding: 2px 16px;
+  border-right: 1px solid var(--line);
 }
 
 .key-card-user { grid-area: user; }
-.key-card-secret { grid-area: secret; }
-.key-card-links { grid-area: links; }
 .key-card-traffic { grid-area: traffic; }
-.key-card-actions { grid-area: actions; }
+.key-card-access {
+  grid-area: access;
+  border-right: 0;
+}
 
-.key-card-secret code {
+.key-secret-line {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+}
+
+.key-secret-line code {
   display: block;
   max-width: 100%;
-  overflow-wrap: anywhere;
-  word-break: break-word;
-  white-space: normal;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   font-size: 13px;
   line-height: 1.35;
+}
+
+.key-quick-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.key-quick-actions button {
+  flex: 1 1 100px;
+}
+
+.key-live-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.key-live-grid span,
+.key-live-grid small {
+  display: block;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.key-live-grid strong {
+  display: block;
+  margin-top: 2px;
+  overflow-wrap: anywhere;
 }
 
 .field-label {
@@ -1386,6 +1533,33 @@ td small {
   overflow-wrap: anywhere;
 }
 
+.backup-item {
+  align-items: center;
+}
+
+.backup-item-name {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.backup-item-name strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.backup-badge {
+  flex: 0 0 auto;
+  border-radius: 999px;
+  padding: 3px 7px;
+  background: color-mix(in srgb, var(--green) 14%, transparent);
+  color: var(--green);
+  font-size: 11px;
+  font-weight: 800;
+}
+
 .logs-meta {
   min-height: 24px;
   margin: -2px 0 8px;
@@ -1406,6 +1580,74 @@ td small {
   padding: 14px;
   white-space: pre-wrap;
   word-break: break-word;
+}
+
+.human-logs {
+  display: grid;
+  gap: 8px;
+  min-height: 220px;
+  max-height: calc(100vh - 260px);
+  overflow: auto;
+}
+
+.human-log {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel-soft);
+  padding: 11px 12px;
+}
+
+.human-log-icon {
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--blue) 14%, transparent);
+}
+
+.human-log.warn .human-log-icon { background: color-mix(in srgb, var(--amber) 18%, transparent); }
+.human-log.error .human-log-icon { background: color-mix(in srgb, var(--red) 16%, transparent); }
+.human-log.good .human-log-icon { background: color-mix(in srgb, var(--green) 16%, transparent); }
+
+.human-log-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.human-log p {
+  margin: 3px 0 0;
+  color: var(--muted);
+  line-height: 1.45;
+}
+
+.human-log time {
+  color: var(--muted);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.human-log details {
+  margin-top: 6px;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.human-log code {
+  display: block;
+  margin-top: 5px;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.logs.is-hidden,
+.human-logs.is-hidden {
+  display: none;
 }
 
 .qr-card {
@@ -1560,6 +1802,12 @@ td small {
   }
 }
 
+@media (max-width: 1500px) {
+  .dashboard-health-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
 @media (max-width: 1280px) {
   .system-strip {
     grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -1569,8 +1817,14 @@ td small {
     grid-template-columns: repeat(2, minmax(0, 1fr));
     grid-template-areas:
       "user traffic"
-      "secret links"
-      "actions actions";
+      "access access";
+  }
+
+  .key-card-traffic { border-right: 0; }
+  .key-card-access {
+    border-top: 1px solid var(--line);
+    padding-top: 12px;
+    margin-top: 10px;
   }
 
   .service-grid {
@@ -1641,8 +1895,22 @@ td small {
   .system-strip,
   .service-grid,
   .runtime-grid,
-  .traffic-summary {
+  .traffic-summary,
+  .operations-strip,
+  .keys-dashboard,
+  .backup-dashboard,
+  .chart-insights {
     grid-template-columns: 1fr;
+  }
+
+  .chart-insight.explainer {
+    grid-column: auto;
+  }
+
+  .keys-filter-row,
+  .human-log-head {
+    align-items: stretch;
+    flex-direction: column;
   }
 
   .keys-tools,
@@ -1766,10 +2034,24 @@ td small {
     grid-template-columns: 1fr;
     grid-template-areas:
       "user"
-      "secret"
-      "links"
       "traffic"
-      "actions";
+      "access";
+  }
+
+  .key-card-user,
+  .key-card-traffic,
+  .key-card-access {
+    border-right: 0;
+    padding: 10px 2px;
+  }
+
+  .key-card-traffic,
+  .key-card-access {
+    border-top: 1px solid var(--line);
+  }
+
+  .key-live-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
   }
 
   .ip-limit-control {

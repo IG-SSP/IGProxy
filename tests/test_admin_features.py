@@ -62,10 +62,14 @@ class AdminFeatureTests(unittest.TestCase):
 
     def test_charts_use_smooth_curves(self):
         script = APP_JS_PATH.read_text(encoding="utf-8")
+        html = INDEX_PATH.read_text(encoding="utf-8")
 
         self.assertIn("smoothSvgPath", script)
         self.assertIn("pathLength=\"1\"", script)
         self.assertIn("linearGradient", script)
+        self.assertIn('id="trafficInsights"', html)
+        self.assertIn("chartExplanation", script)
+        self.assertIn("stableHtml(el, html", script)
 
     def test_backup_path_accepts_only_local_archives(self):
         with tempfile.TemporaryDirectory() as raw:
@@ -229,12 +233,12 @@ class AdminFeatureTests(unittest.TestCase):
 
         self.assertNotIn('class="actions"', app_js)
         self.assertIn('class="key-card', app_js)
-        self.assertIn('class="key-card-actions"', app_js)
-        self.assertIn('class="action-buttons"', app_js)
+        self.assertIn('class="key-card-access"', app_js)
+        self.assertIn('class="key-live-grid"', app_js)
         self.assertIn('class="key-name-button"', app_js)
-        self.assertIn(".key-card .mini-actions,\n.key-card .action-buttons", styles)
-        self.assertIn("grid-template-columns: 1fr", styles)
-        self.assertIn("min-height: 44px", styles)
+        self.assertIn(".key-secret-line", styles)
+        self.assertIn('data-user-filter="online"', index)
+        self.assertIn('id="keysDashboard"', index)
         self.assertNotIn("td.actions", styles)
         self.assertIn('class="keys-list" id="usersTable"', index)
         self.assertNotIn('class="keys-table"', index)
@@ -251,6 +255,24 @@ class AdminFeatureTests(unittest.TestCase):
         self.assertIn("setInterval", app_js)
         self.assertIn("clearInterval", app_js)
         self.assertIn(".auto-refresh-toggle", styles)
+        self.assertIn("refreshAll({ silent: true })", app_js)
+
+    def test_dashboard_layout_and_human_logs_have_new_ui(self):
+        html = INDEX_PATH.read_text(encoding="utf-8")
+        script = APP_JS_PATH.read_text(encoding="utf-8")
+        styles = (ROOT / "admin-web" / "static" / "styles.css").read_text(encoding="utf-8")
+
+        self.assertIn("dashboard-health-grid", html)
+        self.assertIn("repeat(auto-fit, minmax(145px, 1fr))", styles)
+        self.assertIn("@media (max-width: 1500px)", styles)
+        self.assertIn('data-log-view="human"', html)
+        self.assertIn('id="humanLogs"', html)
+        self.assertIn("function explainLogLine", script)
+        self.assertIn("const grouped = []", script)
+        self.assertIn('`Порт ${configuredPort}`', script)
+        self.assertIn("fmtSystemdTime", script)
+        self.assertIn('id="backupDashboard"', html)
+        self.assertIn("modePresentation", script)
 
     def test_get_config_value_secret_accepts_quoted_main_user(self):
         with tempfile.TemporaryDirectory() as raw:

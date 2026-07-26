@@ -99,7 +99,7 @@
 
           <div class="metric-grid">
             <article class="metric-card accent-blue">
-              <span data-i18n="metricMode">Mode</span>
+              <span data-i18n="metricMode">Схема публикации</span>
               <strong id="metricMode">--</strong>
               <small id="metricDomain">--</small>
               <small id="siteStatus" class="metric-status">--</small>
@@ -121,7 +121,9 @@
             </article>
           </div>
 
-          <div class="grid-two">
+          <section class="operations-strip" id="operationsStrip" aria-label="Оперативная сводка"></section>
+
+          <div class="grid-two dashboard-health-grid">
             <section class="panel">
               <div class="panel-head">
                 <div>
@@ -184,6 +186,7 @@
                 <button type="button" data-traffic-view="table" data-i18n="viewRows">Rows</button>
               </div>
             </div>
+            <div id="trafficInsights" class="chart-insights" aria-live="polite"></div>
             <div id="trafficChart" class="traffic-chart"></div>
             <div class="table-wrap" id="trafficTableWrap">
               <table>
@@ -217,7 +220,16 @@
                 </form>
               </div>
             </div>
-            <div class="keys-summary" id="keysSummary">--</div>
+            <div class="keys-dashboard" id="keysDashboard"></div>
+            <div class="keys-filter-row">
+              <div class="segmented compact" role="group" aria-label="Фильтр ключей">
+                <button type="button" data-user-filter="all" class="active">Все</button>
+                <button type="button" data-user-filter="enabled">Включённые</button>
+                <button type="button" data-user-filter="online">Сейчас в сети</button>
+                <button type="button" data-user-filter="disabled">Отключённые</button>
+              </div>
+              <span class="keys-summary" id="keysSummary">--</span>
+            </div>
             <div class="keys-wrap">
               <div class="keys-list" id="usersTable" aria-live="polite"></div>
             </div>
@@ -258,6 +270,7 @@
                 <button type="button" data-user-traffic-view="table" data-i18n="viewRows">Rows</button>
               </div>
             </div>
+            <div id="userTrafficInsights" class="chart-insights" aria-live="polite"></div>
             <div id="userTrafficChart" class="traffic-chart"></div>
             <div class="table-wrap" id="userTrafficTableWrap">
               <table>
@@ -284,6 +297,7 @@
                 </div>
                 <button id="createBackupBtn" type="button" data-i18n="createBackup">Create backup</button>
               </div>
+              <div class="backup-dashboard" id="backupDashboard"></div>
               <div class="backup-schedule">
                 <div>
                   <strong data-i18n="backupScheduleTitle">Automatic backups</strong>
@@ -330,10 +344,15 @@
                   <option value="gotelegram-stats">stats</option>
                   <option value="gotelegram-admin">admin</option>
                 </select>
+                <div class="segmented compact log-view-toggle" role="group" aria-label="Вид логов">
+                  <button type="button" data-log-view="human" class="active">Понятно</button>
+                  <button type="button" data-log-view="raw">Как есть</button>
+                </div>
                 <button id="loadLogsBtn" type="button" data-i18n="loadLogs">Load</button>
               </div>
             </div>
             <div id="logsMeta" class="logs-meta"></div>
+            <div id="humanLogs" class="human-logs"></div>
             <pre id="logsBox" class="logs"></pre>
           </div>
         </section>

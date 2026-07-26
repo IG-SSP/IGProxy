@@ -245,7 +245,7 @@ const i18n = {
     autoRefreshOffShort: "выкл",
     themeDark: "Тёмная",
     themeLight: "Светлая",
-    metricMode: "Режим",
+    metricMode: "Схема публикации",
     metricKeys: "Ключи",
     metricProxyTraffic: "Трафик прокси",
     metricSiteTraffic: "Трафик сайта",
@@ -390,7 +390,7 @@ const i18n = {
     never: "никогда",
     lightTheme: "Светлая",
     darkTheme: "Тёмная",
-    configMode: "Режим",
+    configMode: "Схема публикации",
     configDomain: "Домен",
     configSiteStatus: "Проверка сайта",
     configTemplate: "Шаблон",
@@ -435,6 +435,36 @@ const i18n = {
     chartMax: "макс. {value} за интервал",
     chartProxy: "прокси",
     chartSite: "сайт",
+    modePro: "Свой домен и сайт",
+    modeProHelp: "Прокси маскируется под ваш сайт с доменом и TLS.",
+    modeLite: "Только прокси",
+    modeLiteHelp: "Прокси работает без собственного сайта и использует внешний адрес маскировки.",
+    modeUnknown: "Не определена",
+    chartPeriodTraffic: "Передано за период",
+    chartPeak: "Пиковый интервал",
+    chartPoints: "Точек на графике",
+    chartExplanation: "Высота точки — трафик, переданный за один интервал сбора. Это не накопительный итог.",
+    chartProxyPeriod: "Прокси за период",
+    chartSitePeriod: "Сайт за период",
+    filterKeys: "Фильтр ключей",
+    onlineNow: "Сейчас в сети",
+    totalTraffic: "Общий трафик",
+    noLimit: "Без лимита",
+    showSecret: "Показать",
+    hideSecret: "Скрыть",
+    backupLast: "Последний бекап",
+    backupCount: "Хранится копий",
+    backupSize: "Общий размер",
+    backupNext: "Следующий запуск",
+    backupReady: "готов к восстановлению",
+    logHuman: "Понятно",
+    logRaw: "Как есть",
+    logRawDetails: "Исходная строка",
+    logNoEvents: "Понятных событий в выбранном фрагменте нет",
+    activeServices: "Службы работают",
+    activeConnections: "Текущие подключения",
+    activeAddresses: "Активные IP",
+    diskFree: "Свободно на диске",
     encrypted: "зашифровано",
     ariaAdminSections: "Разделы админки",
     ariaMenu: "Открыть меню",
@@ -479,7 +509,11 @@ const state = {
   backupSchedule: null,
   qrLink: "",
   userSearch: "",
+  userFilter: "all",
+  revealedUsers: new Set(),
   pendingUsers: new Set(),
+  logView: "human",
+  logsPayload: null,
   refreshingAll: false,
   autoRefreshEnabled: localStorage.getItem("gotelegram-auto-refresh") !== "0",
 };
@@ -560,6 +594,34 @@ const escapeHtml = (value) => String(value ?? "").replace(/[&<>"']/g, (ch) => ({
 
 const escapeAttr = (value) => escapeHtml(value).replace(/`/g, "&#096;");
 
+const stableHtml = (element, html, signature = html) => {
+  if (!element) return false;
+  const next = String(signature);
+  if (element.dataset.renderSignature === next) return false;
+  element.innerHTML = html;
+  element.dataset.renderSignature = next;
+  return true;
+};
+
+const modePresentation = (mode) => {
+  if (String(mode).toLowerCase() === "pro") return { label: t("modePro"), help: t("modeProHelp") };
+  if (String(mode).toLowerCase() === "lite") return { label: t("modeLite"), help: t("modeLiteHelp") };
+  return { label: t("modeUnknown"), help: "" };
+};
+
+const compactTime = (epoch) => {
+  if (!epoch) return "--";
+  return new Date(Number(epoch) * 1000).toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit" });
+};
+
+const fmtSystemdTime = (value) => {
+  const raw = String(value || "").trim();
+  if (!raw || raw === "n/a") return "";
+  const parsed = new Date(raw.replace(/^[A-Za-z]{3}\s+/, "").replace(/\s+UTC$/, "Z"));
+  if (Number.isNaN(parsed.getTime())) return raw;
+  return `${parsed.toLocaleString("ru-RU", { timeZone: "UTC", day: "2-digit", month: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit" })} UTC`;
+};
+
 const toast = (message) => {
   const el = $("#toast");
   el.textContent = message;
@@ -591,7 +653,7 @@ function syncAutoRefreshTimer() {
   }
   if (!state.autoRefreshEnabled) return;
   autoRefreshTimer = setInterval(() => {
-    refreshAll().catch((err) => toast(err.message));
+    refreshAll({ silent: true }).catch(() => {});
   }, AUTO_REFRESH_MS);
 }
 
@@ -708,7 +770,7 @@ function renderServices(services = {}) {
     { key: "stats", label: "stats", api: "gotelegram-stats" },
     { key: "admin", label: "admin", api: "gotelegram-admin" },
   ];
-  $("#services").innerHTML = items.map((item) => {
+  const html = items.map((item) => {
     const status = services[item.key] || "unknown";
     const disabled = item.key === "admin" || status === "not_installed";
     return `<article class="service status-${escapeAttr(status)}">
@@ -719,6 +781,7 @@ function renderServices(services = {}) {
       <button class="soft" data-restart="${escapeAttr(item.api)}" ${disabled ? "disabled" : ""}>${escapeHtml(t("restart"))}</button>
     </article>`;
   }).join("");
+  stableHtml($("#services"), html, JSON.stringify(services));
 }
 
 function runtimeData() {
@@ -730,8 +793,8 @@ function runtimeData() {
 function renderRuntime() {
   const data = runtimeData();
   if (!data) {
-    $("#runtimeCards").innerHTML = `<div class="empty">${escapeHtml(t("noRuntime"))}</div>`;
-    $("#runtimeIssues").innerHTML = "";
+    stableHtml($("#runtimeCards"), `<div class="empty">${escapeHtml(t("noRuntime"))}</div>`, "empty");
+    stableHtml($("#runtimeIssues"), "", "empty");
     return;
   }
   const revision = String(data.revision || state.overview?.runtime_summary?.revision || "--");
@@ -742,19 +805,19 @@ function renderRuntime() {
     [t("users"), data.configured_users ?? state.overview?.users_count ?? 0],
     [t("revision"), revision.slice(0, 10)],
   ];
-  $("#runtimeCards").innerHTML = cards.map(([label, value]) => `
+  stableHtml($("#runtimeCards"), cards.map(([label, value]) => `
     <article>
       <span>${escapeHtml(label)}</span>
       <strong>${escapeHtml(value)}</strong>
     </article>
-  `).join("");
+  `).join(""), JSON.stringify(cards));
   const bad = Array.isArray(data.connections_bad_by_class) ? data.connections_bad_by_class : [];
-  $("#runtimeIssues").innerHTML = bad.length ? bad.map((item) => `
+  stableHtml($("#runtimeIssues"), bad.length ? bad.map((item) => `
     <div class="issue">
       <span>${escapeHtml(item.class || "unknown")}</span>
       <strong>${escapeHtml(item.total ?? 0)}</strong>
     </div>
-  `).join("") : "";
+  `).join("") : "", JSON.stringify(bad));
 }
 
 function siteStatusText(site = {}) {
@@ -782,6 +845,28 @@ function renderSiteStatus() {
   statusEl.title = site.url || "";
 }
 
+function renderOperationsSummary() {
+  const services = state.overview?.services || {};
+  const system = state.overview?.system || {};
+  const running = Object.values(services).filter((status) => status === "running").length;
+  const totalServices = Object.keys(services).length;
+  const connections = state.users.reduce((sum, user) => sum + (Number(user.traffic?.current_connections) || 0), 0);
+  const activeIps = state.users.reduce((sum, user) => sum + (Number(user.traffic?.active_unique_ips) || 0), 0);
+  const tiles = [
+    [t("activeServices"), `${running} / ${totalServices}`, running === totalServices ? "good" : "warn", totalServices ? statusLabel(running === totalServices ? "running" : "inactive") : "--"],
+    [t("activeConnections"), connections, connections ? "good" : "", t("onlineNow")],
+    [t("activeAddresses"), activeIps, activeIps ? "good" : "", `${state.users.filter((user) => user.enabled).length} ${t("enabled").toLowerCase()}`],
+    [t("diskFree"), fmtBytes(system.disk?.free), Number(system.disk?.percent) > 85 ? "bad" : "good", `${setGauge("#diskGauge", system.disk?.percent)} ${t("systemDisk").toLowerCase()}`],
+  ];
+  stableHtml($("#operationsStrip"), tiles.map(([label, value, level, hint]) => `
+    <article class="summary-tile ${escapeAttr(level)}">
+      <span>${escapeHtml(label)}</span>
+      <strong>${escapeHtml(value)}</strong>
+      <small>${escapeHtml(hint)}</small>
+    </article>
+  `).join(""), JSON.stringify(tiles));
+}
+
 function roleLabel(role) {
   const key = `role${String(role || "other").replace(/(^|_)([a-z])/g, (_, __, ch) => ch.toUpperCase())}`;
   const label = t(key);
@@ -795,7 +880,7 @@ function renderPort443(payload = {}) {
   const list = $("#port443List");
   const configuredPort = Number(payload.configured_port) || 443;
   $("#port443Number").textContent = String(configuredPort);
-  $("#visualTitle").textContent = `Port ${configuredPort}`;
+  $("#visualTitle").textContent = `Порт ${configuredPort}`;
   $("#port443Configured").textContent = configuredPort === 443 ? t("port443Public") : t("port443Configured").replace("{port}", configuredPort);
   if (payload.error) {
     summary.textContent = t("port443Error");
@@ -848,7 +933,9 @@ function renderOverview() {
   $("#sidebarVersion").textContent = `v${data.version || "--"}`;
   $("#sidebarBind").textContent = `${bind.host || "127.0.0.1"}:${bind.port || 1984}`;
   $("#settingsBind").textContent = `${bind.host || "127.0.0.1"}:${bind.port || 1984}`;
-  $("#metricMode").textContent = cfg.mode || "--";
+  const mode = modePresentation(cfg.mode);
+  $("#metricMode").textContent = mode.label;
+  $("#metricMode").title = mode.help;
   renderSiteStatus();
   renderPort443(data.port_443 || {});
   $("#metricUsers").textContent = data.users_count ?? 0;
@@ -867,6 +954,7 @@ function renderOverview() {
   $("#lastRefresh").textContent = fmtDate(Math.floor(Date.now() / 1000));
   renderServices(data.services || {});
   renderRuntime();
+  renderOperationsSummary();
   renderStats();
   renderBackups(data.backups || []);
   renderConfig();
@@ -993,8 +1081,22 @@ function renderStats() {
   }
   $("#trafficChart").classList.toggle("is-hidden", state.trafficView !== "chart");
   $("#trafficTableWrap").classList.toggle("is-hidden", state.trafficView !== "table");
+  renderTrafficInsights(historyRows);
   drawTrafficChart(historyRows);
   renderHistoryTable(summaryRows);
+}
+
+function renderTrafficInsights(rows) {
+  const points = filterTrafficRows(rows);
+  const proxy = points.reduce((sum, item) => sum + Math.max(0, Number(item.proxy_delta) || 0), 0);
+  const site = points.reduce((sum, item) => sum + Math.max(0, Number(item.site_delta) || 0), 0);
+  const peak = Math.max(0, ...points.map((item) => Math.max(Number(item.proxy_delta) || 0, Number(item.site_delta) || 0)));
+  const html = `
+    <article class="chart-insight series-proxy"><span>${escapeHtml(t("chartProxyPeriod"))}</span><strong>${escapeHtml(fmtBytes(proxy))}</strong><small>${escapeHtml(trafficRangeLabel(state.trafficRange))}</small></article>
+    <article class="chart-insight series-site"><span>${escapeHtml(t("chartSitePeriod"))}</span><strong>${escapeHtml(fmtBytes(site))}</strong><small>${escapeHtml(trafficRangeLabel(state.trafficRange))}</small></article>
+    <article class="chart-insight"><span>${escapeHtml(t("chartPeak"))}</span><strong>${escapeHtml(fmtBytes(peak))}</strong><small>${escapeHtml(`${points.length} ${t("chartPoints").toLowerCase()}`)}</small></article>
+    <article class="chart-insight explainer"><span>${escapeHtml(t("chartExplanation"))}</span></article>`;
+  stableHtml($("#trafficInsights"), html, JSON.stringify([state.trafficRange, proxy, site, peak, points.length]));
 }
 
 function drawTrafficChart(rows) {
@@ -1003,10 +1105,10 @@ function drawTrafficChart(rows) {
   const proxyColor = getComputedStyle(document.documentElement).getPropertyValue("--blue").trim() || "#2563eb";
   const siteColor = getComputedStyle(document.documentElement).getPropertyValue("--green").trim() || "#0f9f6e";
   if (points.length < 2) {
-    el.innerHTML = `<div class="empty-chart">
+    stableHtml(el, `<div class="empty-chart">
       <strong>${escapeHtml(points.length ? t("noTrafficForRange") : t("noHistory"))}</strong>
       <span>${escapeHtml(state.overview?.stats_status?.health === "ok" ? t("statsOk") : t("statsMissing"))}</span>
-    </div>`;
+    </div>`, JSON.stringify(["empty", points.length, state.trafficRange]));
     return;
   }
   const width = 900;
@@ -1023,7 +1125,11 @@ function drawTrafficChart(rows) {
     return `<line x1="${pad.l}" y1="${y}" x2="${width - pad.r}" y2="${y}"></line>`;
   }).join("");
   const axis = t("chartMax").replace("{value}", fmtBytes(max));
-  el.innerHTML = `<svg viewBox="0 0 ${width} ${height}" role="img" aria-label="${escapeAttr(t("ariaTrafficHistory"))}">
+  const firstTime = compactTime(points[0].epoch);
+  const lastTime = compactTime(points[points.length - 1].epoch);
+  const lastProxy = points[points.length - 1].proxy_delta || 0;
+  const lastSite = points[points.length - 1].site_delta || 0;
+  const html = `<svg viewBox="0 0 ${width} ${height}" role="img" aria-label="${escapeAttr(t("ariaTrafficHistory"))}">
     <defs>
       <linearGradient id="proxyGradient" x1="0" y1="0" x2="0" y2="1">
         <stop offset="0%" stop-color="${proxyColor}" stop-opacity=".28"></stop>
@@ -1039,10 +1145,15 @@ function drawTrafficChart(rows) {
     <path class="area site-area" style="fill:url(#siteGradient)" d="${pathFor("site_delta")} L${width - pad.r},${height - pad.b} L${pad.l},${height - pad.b} Z"></path>
     <path class="line proxy-line" pathLength="1" d="${pathFor("proxy_delta")}"></path>
     <path class="line site-line" pathLength="1" d="${pathFor("site_delta")}"></path>
+    <circle class="last-point" cx="${toX(points.length - 1)}" cy="${toY(lastProxy)}" r="5" fill="${proxyColor}"></circle>
+    <circle class="last-point" cx="${toX(points.length - 1)}" cy="${toY(lastSite)}" r="5" fill="${siteColor}"></circle>
     <text x="${pad.l}" y="17" class="axis">${escapeHtml(axis)}</text>
-    <text x="${pad.l}" y="${height - 12}" class="legend" fill="${proxyColor}">${escapeHtml(t("chartProxy"))}</text>
-    <text x="${pad.l + 86}" y="${height - 12}" class="legend" fill="${siteColor}">${escapeHtml(t("chartSite"))}</text>
+    <text x="${pad.l - 8}" y="${pad.t + 4}" text-anchor="end" class="axis-value">${escapeHtml(fmtBytes(max))}</text>
+    <text x="${pad.l - 8}" y="${pad.t + plotH / 2 + 4}" text-anchor="end" class="axis-value">${escapeHtml(fmtBytes(max / 2))}</text>
+    <text x="${pad.l}" y="${height - pad.b + 18}" class="axis-time">${escapeHtml(firstTime)}</text>
+    <text x="${width - pad.r}" y="${height - pad.b + 18}" text-anchor="end" class="axis-time">${escapeHtml(lastTime)}</text>
   </svg>`;
+  stableHtml(el, html, JSON.stringify([state.trafficRange, state.theme, points]));
 }
 
 function renderHistoryTable(rows) {
@@ -1137,10 +1248,10 @@ function drawUserTrafficChart(rows) {
   const points = bucketUserTrafficRows(rows);
   const color = getComputedStyle(document.documentElement).getPropertyValue("--blue").trim() || "#2563eb";
   if (points.length < 2) {
-    el.innerHTML = `<div class="empty-chart">
+    stableHtml(el, `<div class="empty-chart">
       <strong>${escapeHtml(state.userTrafficUser ? t("noTrafficForRange") : t("selectUserTraffic"))}</strong>
       <span>${escapeHtml(state.userTraffic?.status?.runtime_ok ? t("statsOk") : t("trafficRuntimeUnavailable"))}</span>
-    </div>`;
+    </div>`, JSON.stringify(["empty", state.userTrafficUser, state.userTrafficRange]));
     return;
   }
   const width = 900;
@@ -1157,7 +1268,10 @@ function drawUserTrafficChart(rows) {
     return `<line x1="${pad.l}" y1="${y}" x2="${width - pad.r}" y2="${y}"></line>`;
   }).join("");
   const axis = t("chartMax").replace("{value}", fmtBytes(max));
-  el.innerHTML = `<svg viewBox="0 0 ${width} ${height}" role="img" aria-label="${escapeAttr(t("ariaTrafficHistory"))}">
+  const firstTime = compactTime(points[0].epoch);
+  const lastTime = compactTime(points[points.length - 1].epoch);
+  const lastValue = Number(points[points.length - 1].total_delta) || 0;
+  const html = `<svg viewBox="0 0 ${width} ${height}" role="img" aria-label="${escapeAttr(t("ariaTrafficHistory"))}">
     <defs>
       <linearGradient id="userGradient" x1="0" y1="0" x2="0" y2="1">
         <stop offset="0%" stop-color="${color}" stop-opacity=".28"></stop>
@@ -1167,9 +1281,26 @@ function drawUserTrafficChart(rows) {
     <g class="grid">${grid}</g>
     <path class="area proxy-area" style="fill:url(#userGradient)" d="${path} L${width - pad.r},${height - pad.b} L${pad.l},${height - pad.b} Z"></path>
     <path class="line proxy-line" pathLength="1" d="${path}"></path>
+    <circle class="last-point" cx="${toX(points.length - 1)}" cy="${toY(lastValue)}" r="5" fill="${color}"></circle>
     <text x="${pad.l}" y="17" class="axis">${escapeHtml(axis)}</text>
-    <text x="${pad.l}" y="${height - 12}" class="legend" fill="${color}">${escapeHtml(state.userTrafficUser || t("users"))}</text>
+    <text x="${pad.l - 8}" y="${pad.t + 4}" text-anchor="end" class="axis-value">${escapeHtml(fmtBytes(max))}</text>
+    <text x="${pad.l - 8}" y="${pad.t + plotH / 2 + 4}" text-anchor="end" class="axis-value">${escapeHtml(fmtBytes(max / 2))}</text>
+    <text x="${pad.l}" y="${height - pad.b + 18}" class="axis-time">${escapeHtml(firstTime)}</text>
+    <text x="${width - pad.r}" y="${height - pad.b + 18}" text-anchor="end" class="axis-time">${escapeHtml(lastTime)}</text>
   </svg>`;
+  stableHtml(el, html, JSON.stringify([state.userTrafficUser, state.userTrafficRange, state.theme, points]));
+}
+
+function renderUserTrafficInsights(rows) {
+  const points = filterTrafficRows(rows, state.userTrafficRange);
+  const period = points.reduce((sum, item) => sum + Math.max(0, Number(item.total_delta) || 0), 0);
+  const peak = Math.max(0, ...points.map((item) => Number(item.total_delta) || 0));
+  const current = state.userTraffic?.current || {};
+  const html = `
+    <article class="chart-insight"><span>${escapeHtml(t("chartPeriodTraffic"))}</span><strong>${escapeHtml(fmtBytes(period))}</strong><small>${escapeHtml(trafficRangeLabel(state.userTrafficRange))}</small></article>
+    <article class="chart-insight"><span>${escapeHtml(t("chartPeak"))}</span><strong>${escapeHtml(fmtBytes(peak))}</strong><small>${escapeHtml(t("chartExplanation"))}</small></article>
+    <article class="chart-insight"><span>${escapeHtml(t("onlineNow"))}</span><strong>${escapeHtml(`${current.current_connections ?? 0} / ${current.active_unique_ips ?? 0} IP`)}</strong><small>${escapeHtml(t("currentConnections"))}</small></article>`;
+  stableHtml($("#userTrafficInsights"), html, JSON.stringify([state.userTrafficUser, state.userTrafficRange, period, peak, current.current_connections, current.active_unique_ips]));
 }
 
 function renderUserTrafficTable(rows) {
@@ -1195,6 +1326,7 @@ function renderUserTraffic() {
     $("#userTrafficTotal").textContent = "--";
     $("#userTrafficConnections").textContent = "--";
     $("#userTrafficIps").textContent = "--";
+    stableHtml($("#userTrafficInsights"), "", "empty");
     $("#userTrafficChart").innerHTML = `<div class="empty-chart"><strong>${escapeHtml(t("selectUserTraffic"))}</strong></div>`;
     $("#userTrafficTable").innerHTML = `<tr><td colspan="3" class="empty-cell">${escapeHtml(t("selectUserTraffic"))}</td></tr>`;
     return;
@@ -1216,6 +1348,7 @@ function renderUserTraffic() {
   $("#userTrafficIps").textContent = current.active_unique_ips ?? last.active_unique_ips ?? 0;
   $("#userTrafficChart").classList.toggle("is-hidden", state.userTrafficView !== "chart");
   $("#userTrafficTableWrap").classList.toggle("is-hidden", state.userTrafficView !== "table");
+  renderUserTrafficInsights(rows);
   drawUserTrafficChart(rows);
   renderUserTrafficTable(payload.summary_rows?.length ? payload.summary_rows : fallbackUserTrafficSummaries(rows));
 }
@@ -1223,23 +1356,44 @@ function renderUserTraffic() {
 function renderUsers() {
   const container = $("#usersTable");
   const needle = state.userSearch.trim().toLowerCase();
-  const visibleUsers = state.users.filter((user) => !needle || user.name.toLowerCase().includes(needle));
+  const enabledCount = state.users.filter((user) => user.enabled).length;
+  const onlineCount = state.users.filter((user) => Number(user.traffic?.current_connections) > 0).length;
+  const totalConnections = state.users.reduce((sum, user) => sum + (Number(user.traffic?.current_connections) || 0), 0);
+  const totalTraffic = state.users.reduce((sum, user) => sum + (Number(user.traffic?.total_octets) || 0), 0);
+  const dashboard = [
+    [t("enabled"), `${enabledCount} / ${state.users.length}`, enabledCount === state.users.length ? "good" : "warn"],
+    [t("onlineNow"), onlineCount, onlineCount ? "good" : ""],
+    [t("activeConnections"), totalConnections, totalConnections ? "good" : ""],
+    [t("totalTraffic"), fmtBytes(totalTraffic), ""],
+  ];
+  stableHtml($("#keysDashboard"), dashboard.map(([label, value, level]) => `
+    <article class="summary-tile ${escapeAttr(level)}"><span>${escapeHtml(label)}</span><strong>${escapeHtml(value)}</strong></article>
+  `).join(""), JSON.stringify(dashboard));
+  $$("[data-user-filter]").forEach((button) => button.classList.toggle("active", button.dataset.userFilter === state.userFilter));
+  const visibleUsers = state.users.filter((user) => {
+    if (needle && !user.name.toLowerCase().includes(needle)) return false;
+    if (state.userFilter === "enabled" && !user.enabled) return false;
+    if (state.userFilter === "disabled" && user.enabled) return false;
+    if (state.userFilter === "online" && !(Number(user.traffic?.current_connections) > 0)) return false;
+    return true;
+  });
   $("#keysSummary").textContent = `${visibleUsers.length} / ${state.users.length} ${t("keysShown")}`;
   if (!visibleUsers.length) {
-    container.innerHTML = `<div class="empty empty-cell">${escapeHtml(t("noKeys"))}</div>`;
+    stableHtml(container, `<div class="empty empty-cell">${escapeHtml(t("noKeys"))}</div>`, `empty:${state.userFilter}:${needle}`);
     return;
   }
-  container.innerHTML = visibleUsers.map((user) => {
+  const html = visibleUsers.map((user) => {
     const pending = state.pendingUsers.has(user.name);
     const selected = user.name === state.userTrafficUser;
     const traffic = user.traffic || {};
     const trafficTotal = Number(traffic.total_octets) ? fmtBytes(traffic.total_octets) : "--";
     const activeIps = Number(traffic.active_unique_ips) || 0;
+    const connections = Number(traffic.current_connections) || 0;
     const maxUniqueIps = Number.isFinite(Number(user.max_unique_ips)) ? Math.max(0, Number(user.max_unique_ips)) : 0;
+    const revealed = state.revealedUsers.has(user.name);
     return `
     <article class="key-card ${user.enabled ? "" : "disabled-row"} ${pending ? "pending-row" : ""} ${selected ? "selected-row" : ""}" data-select-user-traffic="${escapeAttr(user.name)}" aria-selected="${selected ? "true" : "false"}">
       <div class="key-card-user">
-        <span class="field-label">${escapeHtml(t("tableUser"))}</span>
         <button class="key-name-button" type="button" data-user-traffic="${escapeAttr(user.name)}">
           <strong>${escapeHtml(user.name)}</strong>${user.main ? ` <small>${escapeHtml(t("main"))}</small>` : ""}
         </button>
@@ -1250,58 +1404,67 @@ function renderUsers() {
           </label>
           <strong class="${user.enabled ? "state-on" : "state-off"}">${escapeHtml(pending ? t("applying") : (user.enabled ? t("enabled") : t("disabled")))}</strong>
         </div>
-      </div>
-      <div class="key-card-secret">
-        <span class="field-label">${escapeHtml(t("tableSecret"))}</span>
-        <code title="${escapeAttr(user.secret)}">${escapeHtml(user.secret)}</code>
-      </div>
-      <div class="key-card-links">
-        <span class="field-label">${escapeHtml(t("tableLink"))}</span>
-        <div class="mini-actions">
-          <button class="soft" data-copy="${escapeAttr(user.link)}" ${user.enabled ? "" : "disabled"}>${escapeHtml(t("copyLink"))}</button>
-          <button class="soft" data-user-qr="${escapeAttr(user.name)}">${escapeHtml(t("showQr"))}</button>
-        </div>
+        <button class="soft" data-user-traffic="${escapeAttr(user.name)}">${escapeHtml(t("openStats"))}</button>
       </div>
       <div class="key-card-traffic">
-        <span class="field-label">${escapeHtml(t("tableTraffic"))}</span>
-        <div class="traffic-cell">
-          <div class="traffic-main">
-            <span>
-              <strong>${escapeHtml(trafficTotal)}</strong>
-              <small>${escapeHtml(activeIps ? `${activeIps} ${t("activeIps")}` : fmtDate(traffic.epoch))}</small>
-            </span>
-            <button class="soft" data-user-traffic="${escapeAttr(user.name)}">${escapeHtml(t("openStats"))}</button>
-          </div>
-          <form class="ip-limit-control" data-ip-limit-form="${escapeAttr(user.name)}" title="${escapeAttr(t("ipLimitHint"))}">
-            <span>${escapeHtml(t("ipLimit"))}</span>
-            <input type="number" min="0" max="1000000" step="1" value="${escapeAttr(maxUniqueIps)}" data-ip-limit-input="${escapeAttr(user.name)}" aria-label="${escapeAttr(t("ipLimit"))}: ${escapeAttr(user.name)}">
-            <button class="soft" type="submit" data-ip-limit-save="${escapeAttr(user.name)}">${escapeHtml(t("saveIpLimit"))}</button>
-          </form>
+        <span class="field-label">${escapeHtml(t("onlineNow"))}</span>
+        <div class="key-live-grid">
+          <div><span>${escapeHtml(t("currentConnections"))}</span><strong>${escapeHtml(connections)}</strong></div>
+          <div><span>${escapeHtml(t("activeIps"))}</span><strong>${escapeHtml(activeIps)}</strong></div>
+          <div><span>${escapeHtml(t("totalTraffic"))}</span><strong>${escapeHtml(trafficTotal)}</strong></div>
         </div>
+        <form class="ip-limit-control" data-ip-limit-form="${escapeAttr(user.name)}" title="${escapeAttr(t("ipLimitHint"))}">
+          <span>${escapeHtml(t("ipLimit"))}</span>
+          <input type="number" min="0" max="1000000" step="1" value="${escapeAttr(maxUniqueIps)}" data-ip-limit-input="${escapeAttr(user.name)}" aria-label="${escapeAttr(t("ipLimit"))}: ${escapeAttr(user.name)}">
+          <button class="soft" type="submit" data-ip-limit-save="${escapeAttr(user.name)}">${escapeHtml(t("saveIpLimit"))}</button>
+        </form>
       </div>
-      <div class="key-card-actions">
-        <span class="field-label">${escapeHtml(t("tableActions"))}</span>
-        <div class="action-buttons">
+      <div class="key-card-access">
+        <span class="field-label">${escapeHtml(t("tableSecret"))}</span>
+        <div class="key-secret-line">
+          <code title="${escapeAttr(revealed ? user.secret : t("showSecret"))}">${escapeHtml(revealed ? user.secret : "••••••••••••••••••••••••••••••••")}</code>
+          <button class="soft" data-reveal-user="${escapeAttr(user.name)}">${escapeHtml(revealed ? t("hideSecret") : t("showSecret"))}</button>
+        </div>
+        <div class="key-quick-actions">
+          <button class="soft" data-copy="${escapeAttr(user.link)}" ${user.enabled ? "" : "disabled"}>${escapeHtml(t("copyLink"))}</button>
+          <button class="soft" data-user-qr="${escapeAttr(user.name)}">${escapeHtml(t("showQr"))}</button>
           <button class="soft" data-copy="${escapeAttr(user.secret)}">${escapeHtml(t("copySecret"))}</button>
           <button class="danger" data-delete="${escapeAttr(user.name)}" ${user.main ? "disabled" : ""}>${escapeHtml(t("delete"))}</button>
         </div>
       </div>
     </article>
   `; }).join("");
+  const signature = JSON.stringify([visibleUsers, state.userTrafficUser, state.userFilter, needle, [...state.pendingUsers], [...state.revealedUsers]]);
+  stableHtml(container, html, signature);
 }
 
 function renderBackups(backups) {
   const box = $("#backupsList");
   renderBackupSchedule();
+  const schedule = state.backupSchedule || state.overview?.backup_schedule || {};
+  const totalSize = backups.reduce((sum, item) => sum + (Number(item.size) || 0), 0);
+  const next = schedule.frequency === "off" ? t("scheduleOff") : (fmtSystemdTime(schedule.next) || schedule.calendar || "--");
+  const summary = [
+    [t("backupLast"), backups[0] ? fmtDate(backups[0].mtime) : t("never")],
+    [t("backupCount"), backups.length],
+    [t("backupSize"), fmtBytes(totalSize)],
+    [t("backupNext"), next],
+  ];
+  stableHtml($("#backupDashboard"), summary.map(([label, value]) => `
+    <article class="summary-tile"><span>${escapeHtml(label)}</span><strong>${escapeHtml(value)}</strong></article>
+  `).join(""), JSON.stringify(summary));
   if (!backups.length) {
-    box.innerHTML = `<div class="empty">${escapeHtml(t("noBackups"))}</div>`;
+    stableHtml(box, `<div class="empty">${escapeHtml(t("noBackups"))}</div>`, "empty");
     return;
   }
-  box.innerHTML = backups.map((item) => `
+  const html = backups.map((item, index) => `
     <div class="backup-item">
       <div>
-        <strong>${escapeHtml(item.name)}</strong>
-        <span>${escapeHtml(item.path)} · ${escapeHtml(fmtDate(item.mtime))}</span>
+        <div class="backup-item-name">
+          <strong>${escapeHtml(fmtDate(item.mtime))}</strong>
+          ${index === 0 ? `<span class="backup-badge">${escapeHtml(t("backupReady"))}</span>` : ""}
+        </div>
+        <span title="${escapeAttr(item.name)}">${escapeHtml(item.name)}</span>
       </div>
       <div class="backup-actions">
         <span>${escapeHtml(fmtBytes(item.size))}${item.encrypted ? ` · ${escapeHtml(t("encrypted"))}` : ""}</span>
@@ -1309,6 +1472,7 @@ function renderBackups(backups) {
       </div>
     </div>
   `).join("");
+  stableHtml(box, html, JSON.stringify(backups));
 }
 
 function renderBackupSchedule() {
@@ -1317,7 +1481,7 @@ function renderBackupSchedule() {
   $$("[data-backup-schedule]").forEach((btn) => {
     btn.classList.toggle("active", btn.dataset.backupSchedule === frequency);
   });
-  const next = schedule.next && schedule.next !== "n/a" ? schedule.next : "";
+  const next = fmtSystemdTime(schedule.next);
   $("#backupScheduleMeta").textContent = frequency === "off"
     ? t("scheduleDisabled")
     : t("scheduleNext").replace("{value}", next || (schedule.calendar || "--"));
@@ -1340,8 +1504,9 @@ function renderEvents() {
 function renderConfig() {
   const cfg = state.overview?.config || {};
   const site = state.overview?.site_status || {};
+  const mode = modePresentation(cfg.mode);
   const items = [
-    [t("configMode"), cfg.mode || "--"],
+    [t("configMode"), mode.label],
     [t("configDomain"), cfg.domain || cfg.mask_host || "--"],
     [t("configSiteStatus"), siteStatusText(site)],
     [t("configTemplate"), cfg.template_id || cfg.template || "--"],
@@ -1356,11 +1521,11 @@ function renderConfig() {
   `).join("");
 }
 
-async function refreshAll() {
+async function refreshAll(options = {}) {
   if (state.refreshingAll) return;
   state.refreshingAll = true;
   const btn = $("#refreshBtn");
-  btn.disabled = true;
+  if (!options.silent) btn.disabled = true;
   try {
     state.overview = await api("/api/overview");
     state.backupSchedule = state.overview.backup_schedule || state.backupSchedule;
@@ -1390,9 +1555,9 @@ async function refreshAll() {
       await refreshUserTraffic();
     }
   } catch (err) {
-    toast(err.message);
+    if (!options.silent) toast(err.message);
   } finally {
-    btn.disabled = false;
+    if (!options.silent) btn.disabled = false;
     state.refreshingAll = false;
     updateAutoRefreshToggle();
   }
@@ -1564,6 +1729,7 @@ async function setBackupSchedule(frequency) {
     });
     state.backupSchedule = data.schedule || data;
     renderBackupSchedule();
+    renderBackups(state.overview?.backups || []);
     addEvent(t("scheduleSaved"), frequency);
     toast(t("scheduleSaved"));
   } catch (err) {
@@ -1602,12 +1768,100 @@ function showUserQr(name) {
   $("#qrModal").hidden = false;
 }
 
+function explainLogLine(raw, service) {
+  const match = String(raw).match(/^(\d{4}-\d{2}-\d{2}T\S+)\s+\S+\s+[^:]+:\s?(.*)$/);
+  const timestamp = match?.[1] || "";
+  const message = (match?.[2] || raw).trim();
+  const lower = message.toLowerCase();
+  if (!message) return null;
+  if (/rpc handshake ok|writer restored/.test(lower)) {
+    return { level: "good", icon: "✓", title: "Связь с Telegram восстановлена", explanation: "telemt успешно подключился к одному из промежуточных серверов Telegram.", timestamp, raw };
+  }
+  if (/initializing me pool/.test(lower)) {
+    return { level: "", icon: "↻", title: "Подготовка соединений Telegram", explanation: "telemt создаёт резервный пул подключений к инфраструктуре Telegram.", timestamp, raw };
+  }
+  if (/key derivation parameters/.test(lower)) {
+    return { level: "good", icon: "🔒", title: "Защищённый канал согласован", explanation: "Стороны обменялись параметрами шифрования. Это штатный этап подключения.", timestamp, raw };
+  }
+  if (/socket closed by peer on idle writer/.test(lower)) {
+    return { level: "", icon: "i", title: "Неактивное соединение закрыто", explanation: "Telegram закрыл простаивающий канал; telemt автоматически создаст новый при необходимости.", timestamp, raw };
+  }
+  if (/upstream failed after retries|no healthy upstreams|pool is not ready|all me servers .* failed|marked unhealthy/.test(lower)) {
+    return { level: "warn", icon: "!", title: "Канал Telegram временно недоступен", explanation: "Один или несколько upstream-серверов не ответили. telemt продолжает автоматические повторы и переключение на другой адрес.", timestamp, raw };
+  }
+  if (/error|failed|fatal|panic|traceback|permission denied|address already in use/.test(lower)) {
+    return { level: "error", icon: "!", title: "Ошибка службы", explanation: "Служба сообщила об ошибке. Раскройте исходную строку — там будет техническая причина.", timestamp, raw };
+  }
+  if (/warning|warn|timeout|timed out|connection reset|broken pipe/.test(lower)) {
+    const network = /connection reset|broken pipe/.test(lower);
+    return { level: "warn", icon: "•", title: network ? "Соединение прервано клиентом" : "Предупреждение", explanation: network ? "Клиент закрыл соединение раньше завершения обмена. Единичные события обычно не требуют действий." : "Работа продолжается, но служба отметила потенциальную проблему.", timestamp, raw };
+  }
+  if (/"(GET|POST|PUT|DELETE|PATCH) [^"]+ HTTP\/[^"]+" (2\d\d|3\d\d)/.test(message)) {
+    return { level: "good", icon: "↻", title: "Админка обновила данные", explanation: "Браузер успешно запросил свежие данные у локальной админки.", timestamp, raw };
+  }
+  if (/started|listening|ready|success|active \(running\)/.test(lower)) {
+    return { level: "good", icon: "✓", title: "Служба готова к работе", explanation: "Запуск завершён успешно, сервис принимает запросы.", timestamp, raw };
+  }
+  if (/stopped|stopping|shut down|shutdown/.test(lower)) {
+    return { level: "warn", icon: "■", title: "Служба остановлена", explanation: "Процесс завершил работу или был перезапущен оператором/systemd.", timestamp, raw };
+  }
+  if (/no journal entries/.test(lower)) {
+    return { level: "", icon: "i", title: "Записей пока нет", explanation: "Для выбранной службы systemd-журнал пуст.", timestamp, raw };
+  }
+  if (/traffic|stats|collect|snapshot/.test(lower)) {
+    return { level: "good", icon: "↗", title: "Статистика обновлена", explanation: "Сборщик записал очередной снимок трафика.", timestamp, raw };
+  }
+  return { level: "", icon: "i", title: "Техническое сообщение", explanation: `${service}: обычная информационная запись. Подробности доступны ниже.`, timestamp, raw };
+}
+
+function renderLogsView() {
+  $$("[data-log-view]").forEach((button) => button.classList.toggle("active", button.dataset.logView === state.logView));
+  const rawBox = $("#logsBox");
+  const humanBox = $("#humanLogs");
+  rawBox.classList.toggle("is-hidden", state.logView !== "raw");
+  humanBox.classList.toggle("is-hidden", state.logView !== "human");
+  const payload = state.logsPayload;
+  if (!payload) {
+    if (state.logView === "human") stableHtml(humanBox, `<div class="empty">${escapeHtml(t("loading"))}</div>`, "loading");
+    return;
+  }
+  const text = typeof payload === "string" ? payload : (payload.text || "");
+  rawBox.textContent = text || t("logsNoData");
+  const service = payload.service || $("#logService").value;
+  const parsed = text.split("\n").map((line) => explainLogLine(line, service)).filter(Boolean).slice(-120).reverse();
+  const grouped = [];
+  const byMeaning = new Map();
+  parsed.forEach((item) => {
+    const key = `${item.level}|${item.title}|${item.explanation}`;
+    let group = byMeaning.get(key);
+    if (!group) {
+      group = { ...item, count: 0, samples: [] };
+      byMeaning.set(key, group);
+      grouped.push(group);
+    }
+    group.count += 1;
+    if (group.samples.length < 3) group.samples.push(item.raw);
+  });
+  const html = grouped.length ? grouped.map((item) => `
+    <article class="human-log ${escapeAttr(item.level)}">
+      <span class="human-log-icon" aria-hidden="true">${escapeHtml(item.icon)}</span>
+      <div>
+        <div class="human-log-head"><strong>${escapeHtml(item.title)}${item.count > 1 ? ` · ${item.count}` : ""}</strong><time>${escapeHtml(item.timestamp ? new Date(item.timestamp).toLocaleString("ru-RU") : "")}</time></div>
+        <p>${escapeHtml(item.explanation)}</p>
+        <details><summary>${escapeHtml(t("logRawDetails"))}</summary><code>${escapeHtml(item.samples.join("\n\n"))}</code></details>
+      </div>
+    </article>
+  `).join("") : `<div class="empty">${escapeHtml(t("logNoEvents"))}</div>`;
+  stableHtml(humanBox, html, JSON.stringify([service, text]));
+}
+
 async function loadLogs() {
   const service = $("#logService").value;
   const btn = $("#loadLogsBtn");
   btn.disabled = true;
   $("#logsMeta").textContent = "";
-  $("#logsBox").textContent = t("loading");
+  state.logsPayload = null;
+  renderLogsView();
   try {
     const payload = await api(`/api/logs?service=${encodeURIComponent(service)}`);
     if ($("#logService").value === service) {
@@ -1616,11 +1870,13 @@ async function loadLogs() {
       const lines = structured ? (payload.line_count ?? text.split("\n").filter(Boolean).length) : text.split("\n").filter(Boolean).length;
       const stateText = structured ? (payload.ok ? "OK" : `exit ${payload.exit_code ?? "?"}`) : "OK";
       $("#logsMeta").textContent = `${service} · ${lines} ${t("logsLines")} · ${stateText}`;
-      $("#logsBox").textContent = text || t("logsNoData");
+      state.logsPayload = structured ? payload : { service, ok: true, text };
+      renderLogsView();
     }
   } catch (err) {
     $("#logsMeta").textContent = "";
-    $("#logsBox").textContent = err.message;
+    state.logsPayload = { service, ok: false, text: err.message };
+    renderLogsView();
   } finally {
     btn.disabled = false;
   }
@@ -1710,6 +1966,16 @@ document.addEventListener("click", async (eventObj) => {
     } else if (button.dataset.userTrafficView) {
       state.userTrafficView = button.dataset.userTrafficView === "table" ? "table" : "chart";
       renderUserTraffic();
+    } else if (button.dataset.userFilter) {
+      state.userFilter = ["enabled", "disabled", "online"].includes(button.dataset.userFilter) ? button.dataset.userFilter : "all";
+      renderUsers();
+    } else if (button.dataset.revealUser) {
+      if (state.revealedUsers.has(button.dataset.revealUser)) state.revealedUsers.delete(button.dataset.revealUser);
+      else state.revealedUsers.add(button.dataset.revealUser);
+      renderUsers();
+    } else if (button.dataset.logView) {
+      state.logView = button.dataset.logView === "raw" ? "raw" : "human";
+      renderLogsView();
     } else if (button.dataset.backupSchedule) {
       setBackupSchedule(button.dataset.backupSchedule);
     } else if (button.dataset.restoreBackup) {
@@ -1778,6 +2044,7 @@ $("#qrCopyBtn").addEventListener("click", () => {
 });
 $("#createBackupBtn").addEventListener("click", createBackup);
 $("#loadLogsBtn").addEventListener("click", loadLogs);
+$("#logService").addEventListener("change", loadLogs);
 $("#repairStatsBtn").addEventListener("click", repairStats);
 $("#collectStatsBtn").addEventListener("click", collectStats);
 window.addEventListener("hashchange", () => setPage((location.hash || "#dashboard").slice(1), false));
