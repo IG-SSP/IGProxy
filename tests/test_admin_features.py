@@ -13,6 +13,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 SERVER_PATH = ROOT / "admin-web" / "server.py"
 INDEX_PATH = ROOT / "admin-web" / "static" / "index.html"
+APP_JS_PATH = ROOT / "admin-web" / "static" / "app.js"
 
 
 def load_server(tmpdir: Path):
@@ -49,6 +50,22 @@ class AdminFeatureTests(unittest.TestCase):
         self.assertIn('id="memoryGauge"', html)
         self.assertIn('id="diskGauge"', html)
         self.assertIn('id="userSearch"', html)
+
+    def test_admin_is_russian_only(self):
+        html = INDEX_PATH.read_text(encoding="utf-8")
+        script = APP_JS_PATH.read_text(encoding="utf-8")
+
+        self.assertIn('<html lang="ru">', html)
+        self.assertNotIn('id="languageSelect"', html)
+        self.assertNotIn("function setLanguage", script)
+        self.assertIn('lang: "ru"', script)
+
+    def test_charts_use_smooth_curves(self):
+        script = APP_JS_PATH.read_text(encoding="utf-8")
+
+        self.assertIn("smoothSvgPath", script)
+        self.assertIn("pathLength=\"1\"", script)
+        self.assertIn("linearGradient", script)
 
     def test_backup_path_accepts_only_local_archives(self):
         with tempfile.TemporaryDirectory() as raw:

@@ -465,7 +465,7 @@ const state = {
   stats: null,
   users: [],
   events: [],
-  lang: "en",
+  lang: "ru",
   page: "dashboard",
   theme: document.documentElement.dataset.theme || "light",
   trafficRange: "1h",
@@ -523,6 +523,31 @@ const setGauge = (selector, value) => {
   const element = $(selector);
   if (element) element.style.setProperty("--value", normalized);
   return `${normalized.toFixed(normalized >= 10 ? 0 : 1)}%`;
+};
+
+const smoothSvgPath = (points, key, toX, toY) => {
+  const coords = points.map((point, index) => ({
+    x: toX(index),
+    y: toY(Number(point[key]) || 0),
+  }));
+  if (!coords.length) return "";
+  if (coords.length === 1) return `M${coords[0].x.toFixed(1)},${coords[0].y.toFixed(1)}`;
+  const minY = Math.min(...coords.map((point) => point.y));
+  const maxY = Math.max(...coords.map((point) => point.y));
+  const clampY = (value) => Math.max(minY, Math.min(maxY, value));
+  let path = `M${coords[0].x.toFixed(1)},${coords[0].y.toFixed(1)}`;
+  for (let index = 0; index < coords.length - 1; index += 1) {
+    const p0 = coords[Math.max(0, index - 1)];
+    const p1 = coords[index];
+    const p2 = coords[index + 1];
+    const p3 = coords[Math.min(coords.length - 1, index + 2)];
+    const c1x = p1.x + (p2.x - p0.x) / 6;
+    const c1y = clampY(p1.y + (p2.y - p0.y) / 6);
+    const c2x = p2.x - (p3.x - p1.x) / 6;
+    const c2y = clampY(p2.y - (p3.y - p1.y) / 6);
+    path += ` C${c1x.toFixed(1)},${c1y.toFixed(1)} ${c2x.toFixed(1)},${c2y.toFixed(1)} ${p2.x.toFixed(1)},${p2.y.toFixed(1)}`;
+  }
+  return path;
 };
 
 const escapeHtml = (value) => String(value ?? "").replace(/[&<>"']/g, (ch) => ({
@@ -591,7 +616,8 @@ async function api(path, options = {}) {
 }
 
 function applyI18n() {
-  document.documentElement.lang = state.lang;
+  state.lang = "ru";
+  document.documentElement.lang = "ru";
   $$("[data-i18n]").forEach((el) => {
     el.textContent = t(el.dataset.i18n);
   });
@@ -605,8 +631,6 @@ function applyI18n() {
     el.setAttribute("aria-label", t(el.dataset.i18nAriaLabel));
   });
   $("#themeToggle").textContent = state.theme === "dark" ? t("themeLight") : t("themeDark");
-  $("#languageSelect").value = state.lang;
-  $("#settingsLanguage").textContent = state.lang === "ru" ? "Русский" : "English";
   $("#settingsTheme").textContent = state.theme === "dark" ? t("darkTheme") : t("lightTheme");
   $("#visualTitle").textContent = t("visualTitle");
   $("#visualText").textContent = t("visualText");
@@ -624,26 +648,6 @@ function setTheme(theme) {
   applyI18n();
   if (state.overview) renderStats();
   if (state.userTraffic) renderUserTraffic();
-}
-
-async function setLanguage(lang) {
-  const previous = state.lang;
-  state.lang = lang === "ru" ? "ru" : "en";
-  applyI18n();
-  try {
-    const data = await api("/api/settings/language", {
-      method: "POST",
-      body: JSON.stringify({ language: state.lang }),
-    });
-    state.lang = data.language === "ru" ? "ru" : "en";
-    applyI18n();
-    toast(t("languageSaved"));
-    await refreshAll();
-  } catch (err) {
-    state.lang = previous;
-    applyI18n();
-    toast(err.message);
-  }
 }
 
 function setPage(page, push = true) {
@@ -675,8 +679,7 @@ function updatePageTitle() {
 }
 
 function updateLanguageFromOverview(data) {
-  const lang = String(data.language || data.config?.language || "en").toLowerCase();
-  state.lang = lang === "ru" ? "ru" : "en";
+  state.lang = "ru";
   applyI18n();
 }
 
@@ -1014,17 +1017,28 @@ function drawTrafficChart(rows) {
   const plotH = height - pad.t - pad.b;
   const toX = (i) => pad.l + (plotW * i) / Math.max(1, points.length - 1);
   const toY = (v) => pad.t + plotH - ((v || 0) / max) * plotH;
-  const pathFor = (key) => points.map((p, i) => `${i === 0 ? "M" : "L"}${toX(i).toFixed(1)},${toY(p[key]).toFixed(1)}`).join(" ");
+  const pathFor = (key) => smoothSvgPath(points, key, toX, toY);
   const grid = Array.from({ length: 5 }, (_, i) => {
     const y = pad.t + (plotH / 4) * i;
     return `<line x1="${pad.l}" y1="${y}" x2="${width - pad.r}" y2="${y}"></line>`;
   }).join("");
   const axis = t("chartMax").replace("{value}", fmtBytes(max));
   el.innerHTML = `<svg viewBox="0 0 ${width} ${height}" role="img" aria-label="${escapeAttr(t("ariaTrafficHistory"))}">
+    <defs>
+      <linearGradient id="proxyGradient" x1="0" y1="0" x2="0" y2="1">
+        <stop offset="0%" stop-color="${proxyColor}" stop-opacity=".28"></stop>
+        <stop offset="100%" stop-color="${proxyColor}" stop-opacity="0"></stop>
+      </linearGradient>
+      <linearGradient id="siteGradient" x1="0" y1="0" x2="0" y2="1">
+        <stop offset="0%" stop-color="${siteColor}" stop-opacity=".2"></stop>
+        <stop offset="100%" stop-color="${siteColor}" stop-opacity="0"></stop>
+      </linearGradient>
+    </defs>
     <g class="grid">${grid}</g>
-    <path class="area proxy-area" d="${pathFor("proxy_delta")} L${width - pad.r},${height - pad.b} L${pad.l},${height - pad.b} Z"></path>
-    <path class="line proxy-line" d="${pathFor("proxy_delta")}"></path>
-    <path class="line site-line" d="${pathFor("site_delta")}"></path>
+    <path class="area proxy-area" style="fill:url(#proxyGradient)" d="${pathFor("proxy_delta")} L${width - pad.r},${height - pad.b} L${pad.l},${height - pad.b} Z"></path>
+    <path class="area site-area" style="fill:url(#siteGradient)" d="${pathFor("site_delta")} L${width - pad.r},${height - pad.b} L${pad.l},${height - pad.b} Z"></path>
+    <path class="line proxy-line" pathLength="1" d="${pathFor("proxy_delta")}"></path>
+    <path class="line site-line" pathLength="1" d="${pathFor("site_delta")}"></path>
     <text x="${pad.l}" y="17" class="axis">${escapeHtml(axis)}</text>
     <text x="${pad.l}" y="${height - 12}" class="legend" fill="${proxyColor}">${escapeHtml(t("chartProxy"))}</text>
     <text x="${pad.l + 86}" y="${height - 12}" class="legend" fill="${siteColor}">${escapeHtml(t("chartSite"))}</text>
@@ -1137,16 +1151,22 @@ function drawUserTrafficChart(rows) {
   const plotH = height - pad.t - pad.b;
   const toX = (i) => pad.l + (plotW * i) / Math.max(1, points.length - 1);
   const toY = (v) => pad.t + plotH - ((v || 0) / max) * plotH;
-  const path = points.map((p, i) => `${i === 0 ? "M" : "L"}${toX(i).toFixed(1)},${toY(p.total_delta).toFixed(1)}`).join(" ");
+  const path = smoothSvgPath(points, "total_delta", toX, toY);
   const grid = Array.from({ length: 5 }, (_, i) => {
     const y = pad.t + (plotH / 4) * i;
     return `<line x1="${pad.l}" y1="${y}" x2="${width - pad.r}" y2="${y}"></line>`;
   }).join("");
   const axis = t("chartMax").replace("{value}", fmtBytes(max));
   el.innerHTML = `<svg viewBox="0 0 ${width} ${height}" role="img" aria-label="${escapeAttr(t("ariaTrafficHistory"))}">
+    <defs>
+      <linearGradient id="userGradient" x1="0" y1="0" x2="0" y2="1">
+        <stop offset="0%" stop-color="${color}" stop-opacity=".28"></stop>
+        <stop offset="100%" stop-color="${color}" stop-opacity="0"></stop>
+      </linearGradient>
+    </defs>
     <g class="grid">${grid}</g>
-    <path class="area proxy-area" d="${path} L${width - pad.r},${height - pad.b} L${pad.l},${height - pad.b} Z"></path>
-    <path class="line proxy-line" d="${path}"></path>
+    <path class="area proxy-area" style="fill:url(#userGradient)" d="${path} L${width - pad.r},${height - pad.b} L${pad.l},${height - pad.b} Z"></path>
+    <path class="line proxy-line" pathLength="1" d="${path}"></path>
     <text x="${pad.l}" y="17" class="axis">${escapeHtml(axis)}</text>
     <text x="${pad.l}" y="${height - 12}" class="legend" fill="${color}">${escapeHtml(state.userTrafficUser || t("users"))}</text>
   </svg>`;
@@ -1750,7 +1770,6 @@ document.addEventListener("submit", (eventObj) => {
 
 $("#refreshBtn").addEventListener("click", refreshAll);
 $("#autoRefreshToggle").addEventListener("click", () => setAutoRefresh(!state.autoRefreshEnabled));
-$("#languageSelect").addEventListener("change", (eventObj) => setLanguage(eventObj.target.value));
 $("#qrClose").addEventListener("click", () => {
   $("#qrModal").hidden = true;
 });

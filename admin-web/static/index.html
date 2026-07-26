@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="en">
+<html lang="ru">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -11,7 +11,7 @@
       document.documentElement.dataset.theme = theme;
     }());
   </script>
-  <link rel="stylesheet" href="/styles.css?v=clean-0.2">
+  <link rel="stylesheet" href="/styles.css?v=clean-0.3">
 </head>
 <body>
   <div class="app-shell">
@@ -48,10 +48,6 @@
           <small id="lastRefresh">--</small>
         </div>
         <div class="top-actions">
-          <select id="languageSelect" class="language-select" aria-label="Language" data-i18n-aria-label="ariaLanguage">
-            <option value="en">EN</option>
-            <option value="ru">RU</option>
-          </select>
           <button id="themeToggle" class="ghost" type="button">Theme</button>
           <button id="refreshBtn" type="button" data-i18n="refresh">Refresh</button>
           <button id="autoRefreshToggle" class="auto-refresh-toggle" type="button" aria-pressed="true" data-i18n-title="autoRefresh" title="Auto refresh">
@@ -353,10 +349,6 @@
               </div>
               <div class="settings-list">
                 <div>
-                  <span data-i18n="panelLanguage">Panel language</span>
-                  <strong id="settingsLanguage">--</strong>
-                </div>
-                <div>
                   <span data-i18n="theme">Theme</span>
                   <strong id="settingsTheme">--</strong>
                 </div>
@@ -395,6 +387,6 @@
       <button id="qrCopyBtn" type="button" class="soft" data-i18n="copyLink">Copy link</button>
     </div>
   </div>
-  <script src="/app.js?v=clean-0.2" type="module"></script>
+  <script src="/app.js?v=clean-0.3" type="module"></script>
 </body>
 </html>
