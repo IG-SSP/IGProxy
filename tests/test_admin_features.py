@@ -12,6 +12,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 SERVER_PATH = ROOT / "admin-web" / "server.py"
+INDEX_PATH = ROOT / "admin-web" / "static" / "index.html"
 
 
 def load_server(tmpdir: Path):
@@ -29,6 +30,26 @@ def load_server(tmpdir: Path):
 
 
 class AdminFeatureTests(unittest.TestCase):
+    def test_system_metrics_are_safe_and_bounded(self):
+        with tempfile.TemporaryDirectory() as raw:
+            server = load_server(Path(raw))
+            metrics = server.system_metrics()
+
+        self.assertGreaterEqual(metrics["cpu_count"], 1)
+        self.assertGreaterEqual(metrics["cpu_percent"], 0)
+        self.assertLessEqual(metrics["cpu_percent"], 100)
+        self.assertIn("percent", metrics["memory"])
+        self.assertIn("percent", metrics["disk"])
+        self.assertGreaterEqual(metrics["uptime_seconds"], 0)
+
+    def test_dashboard_contains_system_gauges_and_key_search(self):
+        html = INDEX_PATH.read_text(encoding="utf-8")
+
+        self.assertIn('id="cpuGauge"', html)
+        self.assertIn('id="memoryGauge"', html)
+        self.assertIn('id="diskGauge"', html)
+        self.assertIn('id="userSearch"', html)
+
     def test_backup_path_accepts_only_local_archives(self):
         with tempfile.TemporaryDirectory() as raw:
             tmpdir = Path(raw)

@@ -22,6 +22,12 @@ const i18n = {
     metricProxyTraffic: "Proxy traffic",
     metricSiteTraffic: "Site traffic",
     configuredUsers: "configured users",
+    systemCpu: "CPU load",
+    systemMemory: "Memory",
+    systemDisk: "Storage",
+    systemUptime: "Server uptime",
+    searchKeys: "Search keys",
+    keysShown: "keys shown",
     packets: "packets",
     servicesEyebrow: "Services",
     servicesTitle: "Service health",
@@ -244,6 +250,12 @@ const i18n = {
     metricProxyTraffic: "Трафик прокси",
     metricSiteTraffic: "Трафик сайта",
     configuredUsers: "настроенных пользователей",
+    systemCpu: "Нагрузка CPU",
+    systemMemory: "Память",
+    systemDisk: "Хранилище",
+    systemUptime: "Аптайм сервера",
+    searchKeys: "Поиск ключей",
+    keysShown: "ключей показано",
     packets: "пакетов",
     servicesEyebrow: "Сервисы",
     servicesTitle: "Состояние служб",
@@ -466,6 +478,7 @@ const state = {
   userTrafficLoading: false,
   backupSchedule: null,
   qrLink: "",
+  userSearch: "",
   pendingUsers: new Set(),
   refreshingAll: false,
   autoRefreshEnabled: localStorage.getItem("gotelegram-auto-refresh") !== "0",
@@ -503,6 +516,13 @@ const fmtDuration = (seconds = 0) => {
   if (days) return `${days}d ${hours}h`;
   if (hours) return `${hours}h ${minutes}m`;
   return `${minutes}m`;
+};
+
+const setGauge = (selector, value) => {
+  const normalized = Math.max(0, Math.min(100, Number(value) || 0));
+  const element = $(selector);
+  if (element) element.style.setProperty("--value", normalized);
+  return `${normalized.toFixed(normalized >= 10 ? 0 : 1)}%`;
 };
 
 const escapeHtml = (value) => String(value ?? "").replace(/[&<>"']/g, (ch) => ({
@@ -771,7 +791,8 @@ function renderPort443(payload = {}) {
   const summary = $("#port443Summary");
   const list = $("#port443List");
   const configuredPort = Number(payload.configured_port) || 443;
-  $("#port443Number").textContent = "443";
+  $("#port443Number").textContent = String(configuredPort);
+  $("#visualTitle").textContent = `Port ${configuredPort}`;
   $("#port443Configured").textContent = configuredPort === 443 ? t("port443Public") : t("port443Configured").replace("{port}", configuredPort);
   if (payload.error) {
     summary.textContent = t("port443Error");
@@ -817,6 +838,9 @@ function renderOverview() {
   if (!data) return;
   const cfg = data.config || {};
   const stats = data.stats_current || {};
+  const system = data.system || {};
+  const memory = system.memory || {};
+  const disk = system.disk || {};
   const bind = data.admin_bind || {};
   $("#sidebarVersion").textContent = `v${data.version || "--"}`;
   $("#sidebarBind").textContent = `${bind.host || "127.0.0.1"}:${bind.port || 1984}`;
@@ -829,6 +853,14 @@ function renderOverview() {
   $("#metricProxyPackets").textContent = `${stats.proxy_pkts || 0} ${t("packets")}`;
   $("#metricSiteTraffic").textContent = fmtBytes(stats.site_bytes);
   $("#metricSitePackets").textContent = `${stats.site_pkts || 0} ${t("packets")}`;
+  $("#cpuPercent").textContent = setGauge("#cpuGauge", system.cpu_percent);
+  $("#cpuMeta").textContent = `${system.cpu_count || 0} CPU · load ${(system.load || [0])[0] || 0}`;
+  $("#memoryPercent").textContent = setGauge("#memoryGauge", memory.percent);
+  $("#memoryMeta").textContent = `${fmtBytes(memory.used)} / ${fmtBytes(memory.total)}`;
+  $("#diskPercent").textContent = setGauge("#diskGauge", disk.percent);
+  $("#diskMeta").textContent = `${fmtBytes(disk.used)} / ${fmtBytes(disk.total)}`;
+  $("#systemUptime").textContent = fmtDuration(system.uptime_seconds);
+  $("#systemHostname").textContent = system.hostname || "--";
   $("#lastRefresh").textContent = fmtDate(Math.floor(Date.now() / 1000));
   renderServices(data.services || {});
   renderRuntime();
@@ -1170,11 +1202,14 @@ function renderUserTraffic() {
 
 function renderUsers() {
   const container = $("#usersTable");
-  if (!state.users.length) {
+  const needle = state.userSearch.trim().toLowerCase();
+  const visibleUsers = state.users.filter((user) => !needle || user.name.toLowerCase().includes(needle));
+  $("#keysSummary").textContent = `${visibleUsers.length} / ${state.users.length} ${t("keysShown")}`;
+  if (!visibleUsers.length) {
     container.innerHTML = `<div class="empty empty-cell">${escapeHtml(t("noKeys"))}</div>`;
     return;
   }
-  container.innerHTML = state.users.map((user) => {
+  container.innerHTML = visibleUsers.map((user) => {
     const pending = state.pendingUsers.has(user.name);
     const selected = user.name === state.userTrafficUser;
     const traffic = user.traffic || {};
@@ -1699,6 +1734,10 @@ $("#addUserForm").addEventListener("submit", (eventObj) => {
   }
   input.value = "";
   addUser(name).catch((err) => toast(err.message));
+});
+$("#userSearch").addEventListener("input", (eventObj) => {
+  state.userSearch = eventObj.target.value || "";
+  renderUsers();
 });
 
 document.addEventListener("submit", (eventObj) => {

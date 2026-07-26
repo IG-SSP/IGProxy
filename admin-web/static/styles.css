@@ -329,6 +329,85 @@ h2 {
   gap: 18px;
 }
 
+.system-strip {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.system-gauge-card {
+  min-width: 0;
+  min-height: 126px;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel);
+  padding: 18px;
+  box-shadow: 0 8px 24px rgba(15, 23, 42, .05);
+}
+
+.system-gauge-card > div:last-child {
+  min-width: 0;
+  display: grid;
+  gap: 5px;
+}
+
+.system-gauge-card span,
+.system-gauge-card small {
+  color: var(--muted);
+}
+
+.system-gauge-card > div:last-child > strong {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  font-size: 15px;
+}
+
+.radial-gauge {
+  --value: 0;
+  --gauge-color: var(--blue);
+  position: relative;
+  flex: 0 0 76px;
+  width: 76px;
+  height: 76px;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  background: conic-gradient(var(--gauge-color) calc(var(--value) * 1%), var(--panel-strong) 0);
+}
+
+.radial-gauge::after {
+  content: "";
+  position: absolute;
+  inset: 8px;
+  border-radius: inherit;
+  background: var(--panel);
+}
+
+.radial-gauge strong {
+  position: relative;
+  z-index: 1;
+  font-size: 15px;
+}
+
+.gauge-green { --gauge-color: var(--green); }
+.gauge-violet { --gauge-color: var(--violet); }
+
+.system-uptime-card {
+  position: relative;
+}
+
+.system-state-dot {
+  flex: 0 0 14px;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: var(--green);
+  box-shadow: 0 0 0 7px color-mix(in srgb, var(--green) 14%, transparent);
+}
+
 .visual-overview {
   position: relative;
   display: grid;
@@ -844,6 +923,25 @@ h2 {
 
 .keys-wrap {
   margin-top: 14px;
+}
+
+.keys-tools {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.keys-tools > input {
+  width: min(260px, 100%);
+}
+
+.keys-summary {
+  margin-top: 14px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 700;
 }
 
 .keys-list {
@@ -1436,6 +1534,10 @@ td small {
 }
 
 @media (max-width: 1280px) {
+  .system-strip {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
   .key-card {
     grid-template-columns: repeat(2, minmax(0, 1fr));
     grid-template-areas:
@@ -1509,10 +1611,22 @@ td small {
   }
 
   .metric-grid,
+  .system-strip,
   .service-grid,
   .runtime-grid,
   .traffic-summary {
     grid-template-columns: 1fr;
+  }
+
+  .keys-tools,
+  .keys-tools .inline-form {
+    width: 100%;
+  }
+
+  .keys-tools > input,
+  .keys-tools .inline-form input {
+    flex: 1 1 180px;
+    width: auto;
   }
 
   .inline-form,

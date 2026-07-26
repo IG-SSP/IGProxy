@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>goTelegram Pro Admin</title>
+  <title>goTelegram Clean Admin</title>
   <script>
     (function () {
       var stored = localStorage.getItem("gotelegram-theme");
@@ -11,7 +11,7 @@
       document.documentElement.dataset.theme = theme;
     }());
   </script>
-  <link rel="stylesheet" href="/styles.css?v=2.5.0-admin18">
+  <link rel="stylesheet" href="/styles.css?v=clean-0.2">
 </head>
 <body>
   <div class="app-shell">
@@ -19,7 +19,7 @@
       <div class="brand">
         <div class="brand-mark">GT</div>
         <div>
-          <strong>goTelegram Pro</strong>
+          <strong>goTelegram Clean</strong>
           <span data-i18n="brandSubtitle">Local Admin</span>
         </div>
       </div>
@@ -64,9 +64,28 @@
 
       <main class="content">
         <section class="page-panel active" data-page="dashboard">
+          <section class="system-strip" aria-label="System resources">
+            <article class="system-gauge-card">
+              <div class="radial-gauge gauge-blue" id="cpuGauge"><strong id="cpuPercent">0%</strong></div>
+              <div><span data-i18n="systemCpu">CPU</span><strong id="cpuMeta">--</strong></div>
+            </article>
+            <article class="system-gauge-card">
+              <div class="radial-gauge gauge-green" id="memoryGauge"><strong id="memoryPercent">0%</strong></div>
+              <div><span data-i18n="systemMemory">Memory</span><strong id="memoryMeta">--</strong></div>
+            </article>
+            <article class="system-gauge-card">
+              <div class="radial-gauge gauge-violet" id="diskGauge"><strong id="diskPercent">0%</strong></div>
+              <div><span data-i18n="systemDisk">Storage</span><strong id="diskMeta">--</strong></div>
+            </article>
+            <article class="system-gauge-card system-uptime-card">
+              <span class="system-state-dot"></span>
+              <div><span data-i18n="systemUptime">Server uptime</span><strong id="systemUptime">--</strong><small id="systemHostname">--</small></div>
+            </article>
+          </section>
+
           <section class="visual-overview">
             <div>
-              <p class="eyebrow">goTelegram Pro</p>
+              <p class="eyebrow">goTelegram Clean</p>
               <h2 id="visualTitle">Port 443</h2>
               <p id="visualText">Website, MTProxy and local admin status in one operational view.</p>
             </div>
@@ -194,11 +213,15 @@
                 <p class="eyebrow" data-i18n="keysEyebrow">Access</p>
                 <h2 data-i18n="keysTitle">User keys</h2>
               </div>
-              <form id="addUserForm" class="inline-form">
-                <input id="userName" autocomplete="off" placeholder="client-name" data-i18n-placeholder="userPlaceholder">
-                <button type="submit" data-i18n="addKey">Add key</button>
-              </form>
+              <div class="keys-tools">
+                <input id="userSearch" type="search" autocomplete="off" placeholder="Search keys" data-i18n-placeholder="searchKeys">
+                <form id="addUserForm" class="inline-form">
+                  <input id="userName" autocomplete="off" placeholder="client-name" data-i18n-placeholder="userPlaceholder">
+                  <button type="submit" data-i18n="addKey">Add key</button>
+                </form>
+              </div>
             </div>
+            <div class="keys-summary" id="keysSummary">--</div>
             <div class="keys-wrap">
               <div class="keys-list" id="usersTable" aria-live="polite"></div>
             </div>
@@ -372,6 +395,6 @@
       <button id="qrCopyBtn" type="button" class="soft" data-i18n="copyLink">Copy link</button>
     </div>
   </div>
-  <script src="/app.js?v=2.5.0-admin18" type="module"></script>
+  <script src="/app.js?v=clean-0.2" type="module"></script>
 </body>
 </html>

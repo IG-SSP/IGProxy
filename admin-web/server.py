@@ -17,6 +17,7 @@ import os
 import re
 import secrets
 import shlex
+import shutil
 import socket
 import subprocess
 import time
@@ -66,6 +67,64 @@ TRAFFIC_WINDOWS = {
 
 def utc_now() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def system_metrics() -> dict[str, Any]:
+    """Return a small, dependency-free Linux host snapshot."""
+    cpu_count = max(1, os.cpu_count() or 1)
+    try:
+        load_1, load_5, load_15 = os.getloadavg()
+    except OSError:
+        load_1 = load_5 = load_15 = 0.0
+
+    memory: dict[str, int] = {}
+    try:
+        for line in Path("/proc/meminfo").read_text(encoding="utf-8").splitlines():
+            key, raw = line.split(":", 1)
+            memory[key] = int(raw.strip().split()[0]) * 1024
+    except (OSError, ValueError, IndexError):
+        pass
+
+    mem_total = memory.get("MemTotal", 0)
+    mem_available = memory.get("MemAvailable", memory.get("MemFree", 0))
+    mem_used = max(0, mem_total - mem_available)
+    swap_total = memory.get("SwapTotal", 0)
+    swap_free = memory.get("SwapFree", 0)
+    swap_used = max(0, swap_total - swap_free)
+
+    try:
+        disk_total, disk_used, disk_free = shutil.disk_usage("/")
+    except OSError:
+        disk_total = disk_used = disk_free = 0
+
+    try:
+        uptime_seconds = int(float(Path("/proc/uptime").read_text().split()[0]))
+    except (OSError, ValueError, IndexError):
+        uptime_seconds = 0
+
+    return {
+        "hostname": socket.gethostname(),
+        "cpu_count": cpu_count,
+        "cpu_percent": round(min(100.0, max(0.0, load_1 / cpu_count * 100)), 1),
+        "load": [round(load_1, 2), round(load_5, 2), round(load_15, 2)],
+        "memory": {
+            "total": mem_total,
+            "used": mem_used,
+            "percent": round(mem_used / mem_total * 100, 1) if mem_total else 0,
+        },
+        "swap": {
+            "total": swap_total,
+            "used": swap_used,
+            "percent": round(swap_used / swap_total * 100, 1) if swap_total else 0,
+        },
+        "disk": {
+            "total": disk_total,
+            "used": disk_used,
+            "free": disk_free,
+            "percent": round(disk_used / disk_total * 100, 1) if disk_total else 0,
+        },
+        "uptime_seconds": uptime_seconds,
+    }
 
 
 def run(cmd: list[str], timeout: int = 8) -> tuple[int, str, str]:
@@ -647,18 +706,19 @@ def routed_behind_443() -> list[dict[str, Any]]:
 
 
 def port_443_status() -> dict[str, Any]:
-    listeners, errors = collect_port_listeners(443)
+    configured_port = read_telemt_port()
+    listeners, errors = collect_port_listeners(configured_port)
     shared = load_shared443_config()
-    if shared.get("enabled"):
+    if shared.get("enabled") and configured_port == 443:
         for item in listeners:
             if item.get("role") == "site" and "nginx" in str(item.get("process", "")).lower():
                 item["role"] = "edge"
                 item["details"] = "nginx stream ssl_preread"
     return {
         "checked_at": int(time.time()),
-        "configured_port": read_telemt_port(),
+        "configured_port": configured_port,
         "listeners": listeners,
-        "routes": routed_behind_443(),
+        "routes": routed_behind_443() if configured_port == 443 or shared.get("enabled") else [],
         "shared_443": shared,
         "ok": not errors,
         "error": "; ".join(errors[:2]),
@@ -1261,6 +1321,7 @@ def overview_payload() -> dict[str, Any]:
         "time": utc_now(),
         "language": language,
         "admin_bind": {"host": HOST, "port": PORT},
+        "system": system_metrics(),
         "config": public_config(config),
         "site_status": site_status(config),
         "users_count": len(users),
