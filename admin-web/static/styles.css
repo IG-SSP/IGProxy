@@ -2015,6 +2015,7 @@ td small {
   .traffic-controls,
   .segmented {
     width: 100%;
+    max-width: 100%;
   }
 
   .traffic-controls {
@@ -2023,11 +2024,27 @@ td small {
   }
 
   .segmented {
-    justify-content: stretch;
+    justify-content: flex-start;
+    overflow-x: auto;
   }
 
   .segmented button {
-    flex: 1 1 0;
+    flex: 0 0 auto;
+  }
+
+  .keys-filter-row .segmented {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    overflow: visible;
+  }
+
+  .keys-filter-row .segmented button {
+    width: 100%;
+    white-space: normal;
+  }
+
+  .traffic-summary.compact {
+    grid-template-columns: 1fr;
   }
 
   .inline-form input,
