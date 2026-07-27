@@ -20,6 +20,7 @@ APP_JS_PATH = ROOT / "admin-web" / "static" / "app.js"
 def load_server(tmpdir: Path):
     os.environ["GOTELEGRAM_BACKUP_DIR"] = str(tmpdir / "backups")
     os.environ["GOTELEGRAM_DIR"] = str(tmpdir / "gotelegram")
+    os.environ["GOTELEGRAM_CONFIG"] = str(tmpdir / "gotelegram" / "config.json")
     os.environ["TELEMT_CONFIG"] = str(tmpdir / "etc" / "telemt" / "config.toml")
     os.environ["GOTELEGRAM_DISABLED_USERS"] = str(tmpdir / "gotelegram" / "disabled_users.json")
     os.environ["GOTELEGRAM_WEBSITE_ROOT"] = str(tmpdir / "site")
@@ -411,7 +412,7 @@ class AdminFeatureTests(unittest.TestCase):
         styles = (ROOT / "admin-web" / "static" / "styles.css").read_text(encoding="utf-8")
         server = (ROOT / "admin-web" / "server.py").read_text(encoding="utf-8")
 
-        self.assertIn("<strong>IGProxy</strong>", html)
+        self.assertIn('<strong id="brandName">IGProxy</strong>', html)
         self.assertNotIn("goTelegram Clean", html)
         self.assertIn('data-traffic-metric="rate"', html)
         self.assertIn('id="trafficSmooth"', html)
@@ -421,6 +422,33 @@ class AdminFeatureTests(unittest.TestCase):
         self.assertIn("apply_site_preset", server)
         self.assertIn('"route-workshop"', server)
         self.assertIn(".site-preset-card", styles)
+
+    def test_brand_sponsor_and_client_server_settings_exist(self):
+        html = INDEX_PATH.read_text(encoding="utf-8")
+        script = APP_JS_PATH.read_text(encoding="utf-8")
+        server = (ROOT / "admin-web" / "server.py").read_text(encoding="utf-8")
+        self.assertIn('id="brandEnabled"', html)
+        self.assertIn('id="sponsorUrl"', html)
+        self.assertIn('id="clientServersForm"', html)
+        self.assertIn("/api/client-servers", server)
+        self.assertIn("save_client_servers", server)
+        self.assertIn("renderClientServers", script)
+        self.assertIn("add_mini_app_bridge", server)
+
+    def test_client_server_settings_validate_https_and_preserve_custom_labels(self):
+        with tempfile.TemporaryDirectory() as raw:
+            server = load_server(Path(raw))
+            saved = server.save_client_servers([
+                {"label": "Амстердам · быстрый", "url": "https://ams.example.com", "enabled": True},
+                {"label": "Резерв", "url": "https://backup.example.com/path", "enabled": False},
+            ])
+            self.assertEqual(saved[0]["label"], "Амстердам · быстрый")
+            self.assertTrue(saved[0]["id"])
+            self.assertEqual(server.client_servers_payload(), saved)
+            with self.assertRaises(ValueError):
+                server.save_client_servers([
+                    {"label": "Локальный", "url": "http://127.0.0.1:8080", "enabled": True},
+                ])
 
     def test_dashboard_uses_full_width_and_operational_status_cards(self):
         html = INDEX_PATH.read_text(encoding="utf-8")

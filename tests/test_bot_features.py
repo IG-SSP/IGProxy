@@ -99,7 +99,7 @@ class BotFeatureTests(unittest.TestCase):
         self.assertIn("get_closed_menu_keyboard", source)
         self.assertIn('"Открыть Управление"', source)
         self.assertIn("ReplyKeyboardRemove", source)
-        self.assertIn('"<b>IGProxy</b>\\n"', source)
+        self.assertIn("appearance['brand_name']", source)
         self.assertIn('"<i>Управление прокси</i>\\n\\n"', source)
         self.assertIn('"— Ключами\\n"', source)
         self.assertIn('"— Локальной веб‑админкой\\n\\n"', source)
@@ -108,6 +108,23 @@ class BotFeatureTests(unittest.TestCase):
         self.assertIn('"menu_status": "🟢 Статус"', RU_LANG_PATH.read_text(encoding="utf-8"))
         self.assertIn("https://t.me/proxy?server=", source)
         self.assertNotIn('return f"tg://proxy?server=', source)
+
+    def test_single_bot_separates_admin_and_client_access(self):
+        source = BOT_PATH.read_text(encoding="utf-8")
+        self.assertIn("def get_client_menu()", source)
+        self.assertIn("WebAppInfo(url=item[\"url\"])", source)
+        self.assertIn('callback_data="menu_client_servers"', source)
+        self.assertIn('context.user_data["awaiting_client_server"]', source)
+        self.assertIn("client_menu_text()", source)
+        self.assertIn("if not is_user_allowed(user_id):", source)
+        self.assertNotIn("IGPROXY_CLIENT_BOT", source)
+
+    def test_brand_and_sponsor_are_loaded_from_shared_config(self):
+        source = BOT_PATH.read_text(encoding="utf-8")
+        self.assertIn('config.get("brand_enabled", True)', source)
+        self.assertIn('config.get("brand_name") or "IGProxy"', source)
+        self.assertIn('config.get("sponsor_enabled", False)', source)
+        self.assertIn('config.get("sponsor_url")', source)
 
     def test_stats_view_does_not_reinitialize_firewall_counters(self):
         source = BOT_PATH.read_text(encoding="utf-8")

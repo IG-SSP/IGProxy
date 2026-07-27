@@ -15,6 +15,7 @@ import json
 import logging
 import os
 import re
+import secrets
 import shlex
 import shutil
 import subprocess
@@ -25,7 +26,7 @@ from datetime import datetime
 from io import StringIO
 from pathlib import Path
 from typing import Tuple, Optional, List, Dict, Any
-from urllib.parse import quote
+from urllib.parse import quote, urlparse
 
 from dotenv import load_dotenv
 from telegram import (
@@ -34,6 +35,7 @@ from telegram import (
     InlineKeyboardMarkup,
     ReplyKeyboardMarkup,
     ReplyKeyboardRemove,
+    WebAppInfo,
 )
 from telegram.ext import (
     Application,
@@ -108,7 +110,7 @@ def _read_gotelegram_version() -> str:
                 return str(_v)
     except Exception:
         pass
-    return "2.11.0"
+    return "2.12.0"
 
 
 GOTELEGRAM_VERSION = _read_gotelegram_version()
@@ -586,16 +588,25 @@ def get_main_menu(user_id: Optional[int] = None) -> InlineKeyboardMarkup:
             InlineKeyboardButton(_t(user_id, "menu_admin_web"), callback_data="menu_admin_web"),
             InlineKeyboardButton(_t(user_id, "menu_admins"), callback_data="menu_admins"),
         ],
+        [InlineKeyboardButton("🌐 Клиентские серверы", callback_data="menu_client_servers")],
         [InlineKeyboardButton(_t(user_id, "menu_restart"), callback_data="menu_restart")],
         [InlineKeyboardButton(_t(user_id, "menu_close"), callback_data="close_menu")],
     ]
+    appearance = get_appearance()
+    if appearance["sponsor_enabled"]:
+        buttons.insert(-2, [InlineKeyboardButton(
+            f"♥ {appearance['sponsor_name']}",
+            url=appearance["sponsor_url"],
+        )])
     return InlineKeyboardMarkup(buttons)
 
 
 def main_menu_text() -> str:
     """Return the compact Russian-only management introduction."""
+    appearance = get_appearance()
+    brand = f"<b>{html.escape(appearance['brand_name'])}</b>\n" if appearance["brand_enabled"] else ""
     return (
-        "<b>IGProxy</b>\n"
+        f"{brand}"
         "<i>Управление прокси</i>\n\n"
         "Этот бот управляет MTProxy:\n"
         "— Ключами\n"
@@ -608,13 +619,232 @@ def main_menu_text() -> str:
     )
 
 
+def get_appearance() -> Dict[str, Any]:
+    config = load_json(GOTELEGRAM_CONFIG) or {}
+    brand_name = str(config.get("brand_name") or "IGProxy").strip()[:48] or "IGProxy"
+    sponsor_url = str(config.get("sponsor_url") or "").strip()
+    return {
+        "brand_enabled": bool(config.get("brand_enabled", True)),
+        "brand_name": brand_name,
+        "sponsor_enabled": bool(config.get("sponsor_enabled", False)) and sponsor_url.startswith("https://"),
+        "sponsor_name": str(config.get("sponsor_name") or "Спонсорский канал").strip()[:64],
+        "sponsor_url": sponsor_url,
+    }
+
+
+def get_client_servers() -> List[Dict[str, Any]]:
+    config = load_json(GOTELEGRAM_CONFIG) or {}
+    result: List[Dict[str, Any]] = []
+    for item in config.get("client_servers") or []:
+        if not isinstance(item, dict):
+            continue
+        label = str(item.get("label") or "").strip()[:48]
+        url = str(item.get("url") or "").strip()
+        item_id = re.sub(r"[^a-z0-9_-]", "", str(item.get("id") or "").lower())[:24]
+        if label and url.startswith("https://"):
+            result.append({
+                "id": item_id or hashlib.sha256(f"{label}\0{url}".encode()).hexdigest()[:8],
+                "label": label,
+                "url": url,
+                "enabled": bool(item.get("enabled", True)),
+            })
+    return result
+
+
+def client_menu_text() -> str:
+    appearance = get_appearance()
+    title = appearance["brand_name"] if appearance["brand_enabled"] else "Доступ к прокси"
+    return (
+        f"<b>{html.escape(title)}</b>\n"
+        "<i>Выбор сервера</i>\n\n"
+        "Выберите доступный узел. Сайт откроется внутри Telegram."
+    )
+
+
+def get_client_menu() -> Optional[InlineKeyboardMarkup]:
+    rows = [
+        [InlineKeyboardButton(
+            f"🌐 {item['label']}",
+            web_app=WebAppInfo(url=item["url"]),
+        )]
+        for item in get_client_servers()
+        if item["enabled"]
+    ]
+    appearance = get_appearance()
+    if appearance["sponsor_enabled"]:
+        rows.append([InlineKeyboardButton(
+            f"♥ {appearance['sponsor_name']}",
+            url=appearance["sponsor_url"],
+        )])
+    return InlineKeyboardMarkup(rows) if rows else None
+
+
+def save_client_servers(servers: List[Dict[str, Any]]) -> bool:
+    with FileLock("/run/gotelegram/config.lock"):
+        config = load_json(GOTELEGRAM_CONFIG) or {}
+        config["client_servers"] = servers
+        config["updated_at"] = datetime.now().astimezone().isoformat()
+        ok = save_json(GOTELEGRAM_CONFIG, config)
+        if ok:
+            try:
+                os.chmod(GOTELEGRAM_CONFIG, 0o600)
+            except OSError:
+                pass
+        return ok
+
+
+def admin_client_servers_keyboard() -> InlineKeyboardMarkup:
+    rows = [
+        [InlineKeyboardButton(
+            f"{'🟢' if item['enabled'] else '⚪'} {item['label']}",
+            callback_data=f"client_server_view_{item['id']}",
+        )]
+        for item in get_client_servers()
+    ]
+    rows.append([InlineKeyboardButton("➕ Добавить сервер", callback_data="client_server_add")])
+    rows.append([InlineKeyboardButton("‹ Назад", callback_data="menu_main")])
+    return InlineKeyboardMarkup(rows)
+
+
+async def cb_client_servers(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    await query.answer()
+    servers = get_client_servers()
+    text = (
+        "<b>🌐 Клиентские серверы</b>\n\n"
+        "Обычные пользователи видят только включённые кнопки. "
+        "Формат Mini App требует публичную HTTPS-витрину.\n\n"
+        f"Настроено серверов: <b>{len(servers)}</b>"
+    )
+    await safe_edit_message(
+        query,
+        text,
+        reply_markup=admin_client_servers_keyboard(),
+        parse_mode="HTML",
+    )
+
+
+async def cb_client_server_add(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    await query.answer()
+    context.user_data["awaiting_client_server"] = {"mode": "add", "id": ""}
+    await safe_edit_message(
+        query,
+        "<b>Новый клиентский сервер</b>\n\n"
+        "Пришлите одной строкой:\n"
+        "<code>Подпись кнопки | https://домен</code>\n\n"
+        "Например:\n<code>Амстердам · быстрый | https://ams.example.com</code>",
+        reply_markup=InlineKeyboardMarkup([[
+            InlineKeyboardButton("Отмена", callback_data="menu_client_servers"),
+        ]]),
+        parse_mode="HTML",
+    )
+
+
+async def cb_client_server_view(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    item_id = query.data.removeprefix("client_server_view_")
+    item = next((entry for entry in get_client_servers() if entry["id"] == item_id), None)
+    await query.answer()
+    if not item:
+        await cb_client_servers(update, context)
+        return
+    text = (
+        f"<b>{html.escape(item['label'])}</b>\n\n"
+        f"Состояние: {'показывается клиентам' if item['enabled'] else 'скрыт'}\n"
+        f"Витрина: {html.escape(item['url'])}"
+    )
+    keyboard = InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("✏ Изменить", callback_data=f"client_server_edit_{item_id}"),
+            InlineKeyboardButton(
+                "Скрыть" if item["enabled"] else "Показать",
+                callback_data=f"client_server_toggle_{item_id}",
+            ),
+        ],
+        [InlineKeyboardButton("🗑 Удалить", callback_data=f"client_server_delete_{item_id}")],
+        [InlineKeyboardButton("‹ К списку", callback_data="menu_client_servers")],
+    ])
+    await safe_edit_message(query, text, reply_markup=keyboard, parse_mode="HTML")
+
+
+async def cb_client_server_edit(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    item_id = query.data.removeprefix("client_server_edit_")
+    item = next((entry for entry in get_client_servers() if entry["id"] == item_id), None)
+    await query.answer()
+    if not item:
+        await cb_client_servers(update, context)
+        return
+    context.user_data["awaiting_client_server"] = {"mode": "edit", "id": item_id}
+    await safe_edit_message(
+        query,
+        "<b>Изменение сервера</b>\n\n"
+        "Пришлите новые данные:\n"
+        "<code>Подпись кнопки | https://домен</code>",
+        reply_markup=InlineKeyboardMarkup([[
+            InlineKeyboardButton("Отмена", callback_data=f"client_server_view_{item_id}"),
+        ]]),
+        parse_mode="HTML",
+    )
+
+
+async def cb_client_server_toggle(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    item_id = query.data.removeprefix("client_server_toggle_")
+    servers = get_client_servers()
+    for item in servers:
+        if item["id"] == item_id:
+            item["enabled"] = not item["enabled"]
+            break
+    if not save_client_servers(servers):
+        await query.answer("Не удалось сохранить", show_alert=True)
+        return
+    await cb_client_servers(update, context)
+
+
+async def cb_client_server_delete(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    item_id = query.data.removeprefix("client_server_delete_")
+    item = next((entry for entry in get_client_servers() if entry["id"] == item_id), None)
+    await query.answer()
+    if not item:
+        await cb_client_servers(update, context)
+        return
+    await safe_edit_message(
+        query,
+        f"Удалить кнопку <b>{html.escape(item['label'])}</b>?",
+        reply_markup=InlineKeyboardMarkup([
+            [InlineKeyboardButton("✅ Удалить", callback_data=f"client_server_delete_yes_{item_id}")],
+            [InlineKeyboardButton("Отмена", callback_data=f"client_server_view_{item_id}")],
+        ]),
+        parse_mode="HTML",
+    )
+
+
+async def cb_client_server_delete_yes(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    item_id = query.data.removeprefix("client_server_delete_yes_")
+    servers = [item for item in get_client_servers() if item["id"] != item_id]
+    if not save_client_servers(servers):
+        await query.answer("Не удалось сохранить", show_alert=True)
+        return
+    await cb_client_servers(update, context)
+
+
 def get_closed_menu_keyboard() -> ReplyKeyboardMarkup:
     """A persistent launcher shown only while the inline management menu is closed."""
+    appearance = get_appearance()
+    placeholder = (
+        f"Открыть меню {appearance['brand_name']}"
+        if appearance["brand_enabled"]
+        else "Открыть меню управления"
+    )
     return ReplyKeyboardMarkup(
         [["Открыть Управление"]],
         resize_keyboard=True,
         one_time_keyboard=False,
-        input_field_placeholder="Открыть меню IGProxy",
+        input_field_placeholder=placeholder,
     )
 
 
@@ -660,12 +890,23 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await update.message.reply_text(text, reply_markup=keyboard, parse_mode="HTML")
         return
 
-    # ── Проверка доступа ──
+    # ── Клиентский уровень ──
     if not is_user_allowed(user_id):
+        await hide_closed_menu_keyboard(update)
+        servers = [item for item in get_client_servers() if item["enabled"]]
+        text = client_menu_text() if servers else (
+            f"{client_menu_text()}\n\n"
+            "Сейчас нет доступных серверов. Попробуйте позже."
+        )
         await update.message.reply_text(
-            _tf(user_id, "access_denied", user_id),
+            text,
+            reply_markup=get_client_menu(),
             parse_mode="HTML",
         )
+        try:
+            await update.message.delete()
+        except TelegramError:
+            pass
         return
 
     await hide_closed_menu_keyboard(update)
@@ -690,9 +931,16 @@ async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Help command - show available commands."""
     if not await require_auth(update, context):
         return
+    await hide_closed_menu_keyboard(update)
     user_id = _uid(update)
+    appearance = get_appearance()
+    help_title = (
+        f"{appearance['brand_name']} Bot — Команды"
+        if appearance["brand_enabled"]
+        else "Команды управления"
+    )
     help_text = (
-        f"<b>{_t(user_id, 'help_title')}</b>\n\n"
+        f"<b>{html.escape(help_title)}</b>\n\n"
         f"{_t(user_id, 'help_lines')}"
     )
     await update.message.reply_text(help_text, parse_mode="HTML")
@@ -702,6 +950,7 @@ async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     """Quick status check."""
     if not await require_auth(update, context):
         return
+    await hide_closed_menu_keyboard(update)
     user_id = _uid(update)
     status_text = await get_status_text(user_id)
     await update.message.reply_text(status_text, parse_mode="HTML")
@@ -715,6 +964,7 @@ async def cmd_logs(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Show recent logs."""
     if not await require_auth(update, context):
         return
+    await hide_closed_menu_keyboard(update)
     user_id = _uid(update)
 
     code, stdout, stderr = await sh(
@@ -792,8 +1042,14 @@ async def get_status_text(user_id: Optional[int] = None) -> str:
     running = sum(1 for value in services.values() if value == "running")
     dc_count = max(1, int(config.get("network_dc_count") or 1))
     port = int(config.get("port") or 443)
+    appearance = get_appearance()
+    status_title = (
+        f"{appearance['brand_name']} · текущий статус"
+        if appearance["brand_enabled"]
+        else "Текущий статус"
+    )
     lines = [
-        "<b>📊 IGProxy · текущий статус</b>",
+        f"<b>📊 {html.escape(status_title)}</b>",
         "",
         f"{'🟢' if services.get('telemt') == 'running' else '🔴'} <b>Прокси:</b> "
         f"{html.escape(str(services.get('telemt') or 'неизвестно'))} · порт <code>{port}</code>",
@@ -801,7 +1057,7 @@ async def get_status_text(user_id: Optional[int] = None) -> str:
         f"<b>Ключи:</b> {len(users)} всего · {online_keys} сейчас активны",
         f"<b>Подключения:</b> {connections} · активных IP: {active_ips}",
         f"<b>Скорость прокси:</b> {format_bytes_human(int(recent_proxy_rate()))}/с",
-        f"<b>DC в сети IGProxy:</b> {dc_count}",
+        f"<b>DC в сети:</b> {dc_count}",
         "",
         f"<b>CPU:</b> {float(system.get('cpu_percent') or 0):.0f}% · "
         f"load {float((system.get('load') or [0])[0] or 0):.2f}",
@@ -2901,6 +3157,7 @@ async def cmd_addadmin(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
             parse_mode="HTML",
         )
         return
+    await hide_closed_menu_keyboard(update)
 
     args = context.args or []
     if not args:
@@ -2941,6 +3198,7 @@ async def cmd_deladmin(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
             parse_mode="HTML",
         )
         return
+    await hide_closed_menu_keyboard(update)
 
     args = context.args or []
     if not args:
@@ -3100,6 +3358,8 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         "admin_web_ssh": cb_admin_web_ssh,
         "menu_admins": cb_menu_admins,
         "menu_users": cb_menu_users,
+        "menu_client_servers": cb_client_servers,
+        "client_server_add": cb_client_server_add,
         "backup_create": cb_backup_create,
         "backup_list": cb_backup_list,
         "ssl_status": cb_ssl_status,
@@ -3113,6 +3373,16 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     # Pattern-based handlers
     if data == "user_add":
         await cb_user_add(update, context)
+    elif data.startswith("client_server_view_"):
+        await cb_client_server_view(update, context)
+    elif data.startswith("client_server_edit_"):
+        await cb_client_server_edit(update, context)
+    elif data.startswith("client_server_toggle_"):
+        await cb_client_server_toggle(update, context)
+    elif data.startswith("client_server_delete_yes_"):
+        await cb_client_server_delete_yes(update, context)
+    elif data.startswith("client_server_delete_"):
+        await cb_client_server_delete(update, context)
     elif data.startswith("user_view_"):
         await cb_user_view(update, context)
     elif data.startswith("user_qr_"):
@@ -3141,11 +3411,21 @@ async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE
     if update.message is None or update.message.text is None:
         return
     if not is_user_allowed(update.effective_user.id):
+        await hide_closed_menu_keyboard(update)
+        await update.message.reply_text(
+            client_menu_text(),
+            reply_markup=get_client_menu(),
+            parse_mode="HTML",
+        )
+        try:
+            await update.message.delete()
+        except TelegramError:
+            pass
         return
+    await hide_closed_menu_keyboard(update)
     user_id = update.effective_user.id
     if update.message.text.strip() == "Открыть Управление":
         closed_id = context.user_data.pop("closed_menu_message_id", None)
-        await hide_closed_menu_keyboard(update)
         if closed_id:
             try:
                 await context.bot.delete_message(update.effective_chat.id, closed_id)
@@ -3157,6 +3437,49 @@ async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE
             parse_mode="HTML",
         )
         context.user_data["main_menu_message_id"] = sent.message_id
+        try:
+            await update.message.delete()
+        except TelegramError:
+            pass
+        return
+    pending_server = context.user_data.pop("awaiting_client_server", None)
+    if pending_server:
+        raw = update.message.text.strip()
+        if "|" not in raw:
+            await update.message.reply_text(
+                "Нужен формат: <code>Подпись | https://домен</code>",
+                parse_mode="HTML",
+            )
+            context.user_data["awaiting_client_server"] = pending_server
+            return
+        label, url = (part.strip() for part in raw.split("|", 1))
+        parsed = urlparse(url)
+        if not label or len(label) > 48 or parsed.scheme != "https" or not parsed.hostname:
+            await update.message.reply_text(
+                "Проверьте подпись и публичную HTTPS-ссылку.",
+            )
+            context.user_data["awaiting_client_server"] = pending_server
+            return
+        servers = get_client_servers()
+        if pending_server.get("mode") == "edit":
+            item = next((entry for entry in servers if entry["id"] == pending_server.get("id")), None)
+            if item:
+                item["label"] = label
+                item["url"] = url
+        else:
+            servers.append({
+                "id": secrets.token_hex(4),
+                "label": label,
+                "url": url,
+                "enabled": True,
+            })
+        if not save_client_servers(servers):
+            await update.message.reply_text("❌ Не удалось сохранить настройки.")
+            return
+        await update.message.reply_text(
+            "✅ Клиентское меню обновлено.",
+            reply_markup=admin_client_servers_keyboard(),
+        )
         try:
             await update.message.delete()
         except TelegramError:

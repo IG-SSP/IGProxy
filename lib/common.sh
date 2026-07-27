@@ -3,7 +3,7 @@
 # Colors, logging, spinner, system helpers, v1 compat, i18n-aware
 
 # ── Version ───────────────────────────────────────────────────────────────────
-GOTELEGRAM_VERSION="2.11.0"
+GOTELEGRAM_VERSION="2.12.0"
 GOTELEGRAM_NAME="IGProxy"
 
 # ── Пути ──────────────────────────────────────────────────────────────────────

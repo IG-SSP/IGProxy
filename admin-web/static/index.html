@@ -25,7 +25,7 @@
           </svg>
         </div>
         <div>
-          <strong>IGProxy</strong>
+          <strong id="brandName">IGProxy</strong>
           <span data-i18n="brandSubtitle">Local Admin</span>
         </div>
       </div>
@@ -90,7 +90,7 @@
             <div class="port-overview-copy">
               <div class="port-title-row">
                 <div>
-                  <p class="eyebrow">IGProxy · входной узел</p>
+                  <p class="eyebrow" id="dashboardBrandEyebrow">IGProxy · входной узел</p>
                   <h2 id="visualTitle">Port 443</h2>
                 </div>
                 <span class="port-health-badge" id="portHealthBadge">Проверяем</span>
@@ -420,7 +420,7 @@
               </div>
               <div class="backup-includes">
                 <strong data-i18n="backupIncludesTitle">Backup contents</strong>
-                <span data-i18n="backupIncludesText">telemt config, IGProxy settings, keys, disabled keys, site, templates, SSL certificates, bot, admin panel and traffic history.</span>
+                <span data-i18n="backupIncludesText">telemt config, system settings, keys, disabled keys, site, templates, SSL certificates, bot, admin panel and traffic history.</span>
               </div>
               <div id="backupsList" class="backup-list"></div>
             </section>
@@ -502,8 +502,19 @@
                 </div>
               </div>
               <form id="generalSettingsForm" class="settings-form">
-                <label>Количество DC в сети IGProxy
+                <label>Количество DC в сети
                   <input id="networkDcCount" type="number" min="1" max="999" value="1">
+                </label>
+                <label class="setting-check"><input id="brandEnabled" type="checkbox" checked> Показывать название проекта</label>
+                <label>Название проекта
+                  <input id="brandNameInput" type="text" maxlength="48" value="IGProxy" placeholder="IGProxy">
+                </label>
+                <label class="setting-check"><input id="sponsorEnabled" type="checkbox"> Показывать спонсорский канал в ботах</label>
+                <label>Название канала
+                  <input id="sponsorName" type="text" maxlength="64" placeholder="Спонсорский канал">
+                </label>
+                <label>Ссылка на канал
+                  <input id="sponsorUrl" type="url" placeholder="https://t.me/channel">
                 </label>
                 <button type="submit">Сохранить</button>
               </form>
@@ -519,6 +530,23 @@
               <div id="configList" class="settings-list"></div>
             </section>
           </div>
+          <section class="panel site-settings-panel">
+            <div class="panel-head">
+              <div>
+                <p class="eyebrow">Клиентский уровень</p>
+                <h2>Серверы в Telegram-боте</h2>
+              </div>
+            </div>
+            <p class="panel-note">Обычные пользователи увидят только эти кнопки. Каждая открывает HTTPS-витрину выбранного сервера внутри Telegram Mini App.</p>
+            <form id="clientServersForm" class="settings-form client-servers-form">
+              <div class="client-server-head">
+                <strong>Кнопки серверов</strong>
+                <button id="addClientServer" type="button" class="soft">Добавить сервер</button>
+              </div>
+              <div id="clientServerList" class="client-server-list"></div>
+              <button type="submit">Сохранить клиентское меню</button>
+            </form>
+          </section>
           <section class="panel site-settings-panel">
             <div class="panel-head">
               <div>
@@ -538,7 +566,7 @@
               <summary><span class="custom-site-summary-icon">↥</span><span>Загрузить свою страницу<small>Автономный HTML до 512 КБ</small></span></summary>
               <div class="custom-site-intro">
                 <strong>Собственная витрина</strong>
-                <p>Оставьте <code>__PROXY_LINK__</code> в ссылке главной кнопки — IGProxy подставит выбранный ключ при публикации.</p>
+                <p>Оставьте <code>__PROXY_LINK__</code> в ссылке главной кнопки — система подставит выбранный ключ при публикации.</p>
               </div>
               <form id="customSiteForm" class="custom-site-form">
                 <label class="custom-file-drop" id="customSiteDrop" for="customSiteFile">

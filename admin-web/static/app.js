@@ -93,7 +93,7 @@ const i18n = {
     backupScheduleTitle: "Automatic backups",
     backupScheduleLoading: "Loading schedule...",
     backupIncludesTitle: "Backup contents",
-    backupIncludesText: "telemt config, IGProxy settings, keys, disabled keys, site, templates, SSL certificates, bot, admin panel and traffic history.",
+    backupIncludesText: "telemt config, system settings, keys, disabled keys, site, templates, SSL certificates, bot, admin panel and traffic history.",
     scheduleOff: "Off",
     scheduleDaily: "Daily",
     scheduleWeekly: "Weekly",
@@ -336,7 +336,7 @@ const i18n = {
     backupScheduleTitle: "Автобекапы",
     backupScheduleLoading: "Загрузка расписания...",
     backupIncludesTitle: "Что входит в бекап",
-    backupIncludesText: "конфиг telemt, настройки IGProxy, ключи, отключённые ключи, сайт, шаблоны, SSL-сертификаты, бот, админка и история трафика.",
+    backupIncludesText: "конфиг telemt, настройки системы, ключи, отключённые ключи, сайт, шаблоны, SSL-сертификаты, бот, админка и история трафика.",
     scheduleOff: "Выкл",
     scheduleDaily: "Каждый день",
     scheduleWeekly: "Каждую неделю",
@@ -560,6 +560,9 @@ const state = {
   autoRefreshMs: Number(localStorage.getItem("igproxy-refresh-ms") || AUTO_REFRESH_MS),
   themeMode: localStorage.getItem("igproxy-theme-mode") || "system",
   siteSettings: null,
+  clientServers: [],
+  clientServersDirty: false,
+  generalSettingsDirty: false,
   selectedSitePreset: "",
   healthLoading: false,
 };
@@ -1114,6 +1117,19 @@ function renderOverview() {
   const data = state.overview;
   if (!data) return;
   const cfg = data.config || {};
+  const brandEnabled = cfg.brand_enabled !== false;
+  const brandName = String(cfg.brand_name || "IGProxy");
+  $("#brandName").hidden = !brandEnabled;
+  $("#brandName").textContent = brandName;
+  $("#dashboardBrandEyebrow").textContent = brandEnabled ? `${brandName} · входной узел` : "Входной узел";
+  document.title = brandEnabled ? `${brandName} Admin` : "Локальная админка";
+  if (!state.generalSettingsDirty) {
+    $("#brandEnabled").checked = brandEnabled;
+    $("#brandNameInput").value = brandName;
+    $("#sponsorEnabled").checked = Boolean(cfg.sponsor_enabled);
+    $("#sponsorName").value = cfg.sponsor_name || "Спонсорский канал";
+    $("#sponsorUrl").value = cfg.sponsor_url || "";
+  }
   const stats = data.stats_current || {};
   const system = data.system || {};
   const memory = system.memory || {};
@@ -1141,7 +1157,7 @@ function renderOverview() {
     : (cfg.network_dc_count || 1);
   $("#portConnections").textContent = liveConnections;
   $("#portActiveIps").textContent = activeIps;
-  $("#networkDcCount").value = cfg.network_dc_count || 1;
+  if (!state.generalSettingsDirty) $("#networkDcCount").value = cfg.network_dc_count || 1;
   $("#metricUsers").textContent = data.users_count ?? 0;
   $("#metricProxyTraffic").textContent = fmtBytes(stats.proxy_bytes);
   $("#metricProxyPackets").textContent = `${stats.proxy_pkts || 0} ${t("packets")}`;
@@ -1867,10 +1883,47 @@ async function saveCustomSite() {
 async function saveGeneralSettings() {
   await api("/api/settings/general", {
     method: "POST",
-    body: JSON.stringify({ network_dc_count: Number($("#networkDcCount").value) || 1 }),
+    body: JSON.stringify({
+      network_dc_count: Number($("#networkDcCount").value) || 1,
+      brand_enabled: $("#brandEnabled").checked,
+      brand_name: $("#brandNameInput").value.trim(),
+      sponsor_enabled: $("#sponsorEnabled").checked,
+      sponsor_name: $("#sponsorName").value.trim(),
+      sponsor_url: $("#sponsorUrl").value.trim(),
+    }),
   });
+  state.generalSettingsDirty = false;
   toast("Настройки сохранены");
   await refreshAll({ silent: true });
+}
+
+function renderClientServers() {
+  const list = $("#clientServerList");
+  list.innerHTML = state.clientServers.map((item, index) => `
+    <div class="client-server-row" data-client-server="${index}">
+      <label>Подпись<input data-server-label type="text" maxlength="48" value="${escapeAttr(item.label || "")}" placeholder="Амстердам"></label>
+      <label>HTTPS-витрина<input data-server-url type="url" value="${escapeAttr(item.url || "")}" placeholder="https://proxy.example.com"></label>
+      <label class="setting-check"><input data-server-enabled type="checkbox" ${item.enabled !== false ? "checked" : ""}> Показывать</label>
+      <button type="button" class="danger soft" data-remove-client-server="${index}">Удалить</button>
+      <input data-server-id type="hidden" value="${escapeAttr(item.id || "")}">
+    </div>
+  `).join("") || '<div class="empty-state">Добавьте хотя бы один сервер для клиентского меню.</div>';
+}
+
+async function saveClientServers() {
+  const servers = $$("#clientServerList [data-client-server]").map((row) => ({
+    id: row.querySelector("[data-server-id]").value,
+    label: row.querySelector("[data-server-label]").value.trim(),
+    url: row.querySelector("[data-server-url]").value.trim(),
+    enabled: row.querySelector("[data-server-enabled]").checked,
+  }));
+  state.clientServers = await api("/api/client-servers", {
+    method: "POST",
+    body: JSON.stringify({ servers }),
+  });
+  state.clientServersDirty = false;
+  renderClientServers();
+  toast("Клиентское меню сохранено");
 }
 
 async function refreshAll(options = {}) {
@@ -1879,11 +1932,12 @@ async function refreshAll(options = {}) {
   const btn = $("#refreshBtn");
   if (!options.silent) btn.disabled = true;
   try {
-    const [overview, users, siteSettings, health] = await Promise.all([
+    const [overview, users, siteSettings, health, clientServers] = await Promise.all([
       api("/api/overview"),
       api("/api/users"),
       api("/api/site/settings"),
       api("/api/health"),
+      api("/api/client-servers"),
     ]);
     state.overview = overview;
     state.backupSchedule = state.overview.backup_schedule || state.backupSchedule;
@@ -1891,6 +1945,7 @@ async function refreshAll(options = {}) {
     state.users = users;
     state.siteSettings = siteSettings;
     state.health = health;
+    state.clientServers = clientServers;
     ensureUserTrafficSelection();
     if (!state.stats) {
       state.stats = {
@@ -1910,6 +1965,7 @@ async function refreshAll(options = {}) {
     renderHealth();
     renderUsers();
     renderSiteSettings();
+    if (!state.clientServersDirty) renderClientServers();
     if (state.page === "traffic") {
       await refreshStats();
     } else if (state.page === "keys") {
@@ -2483,6 +2539,32 @@ $("#addUserForm").addEventListener("submit", (eventObj) => {
 $("#generalSettingsForm").addEventListener("submit", (eventObj) => {
   eventObj.preventDefault();
   saveGeneralSettings().catch((err) => toast(err.message));
+});
+$("#generalSettingsForm").addEventListener("input", () => {
+  state.generalSettingsDirty = true;
+});
+$("#clientServersForm").addEventListener("submit", (eventObj) => {
+  eventObj.preventDefault();
+  saveClientServers().catch((err) => toast(err.message));
+});
+$("#addClientServer").addEventListener("click", () => {
+  state.clientServers.push({ id: "", label: "", url: "", enabled: true });
+  state.clientServersDirty = true;
+  renderClientServers();
+  $("#clientServerList [data-client-server]:last-child [data-server-label]")?.focus();
+});
+$("#clientServerList").addEventListener("click", (eventObj) => {
+  const button = eventObj.target.closest("[data-remove-client-server]");
+  if (!button) return;
+  state.clientServers.splice(Number(button.dataset.removeClientServer), 1);
+  state.clientServersDirty = true;
+  renderClientServers();
+});
+$("#clientServerList").addEventListener("input", () => {
+  state.clientServersDirty = true;
+});
+$("#clientServerList").addEventListener("change", () => {
+  state.clientServersDirty = true;
 });
 $("#siteSettingsForm").addEventListener("submit", (eventObj) => {
   eventObj.preventDefault();
