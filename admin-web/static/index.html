@@ -32,6 +32,7 @@
 
       <nav class="nav-tabs" aria-label="Admin sections" data-i18n-aria-label="ariaAdminSections">
         <button type="button" class="nav-item active" data-nav="dashboard"><span class="nav-icon">⌁</span><span data-i18n="navDashboard">Dashboard</span></button>
+        <button type="button" class="nav-item" data-nav="health"><span class="nav-icon">✚</span><span data-i18n="navHealth">Health</span></button>
         <button type="button" class="nav-item" data-nav="traffic"><span class="nav-icon">⇅</span><span data-i18n="navTraffic">Traffic</span></button>
         <button type="button" class="nav-item" data-nav="keys"><span class="nav-icon">⚿</span><span data-i18n="navKeys">Keys</span></button>
         <button type="button" class="nav-item" data-nav="backups"><span class="nav-icon">▣</span><span data-i18n="navBackups">Backups</span></button>
@@ -98,7 +99,7 @@
               <div class="port-facts">
                 <button type="button" class="port-fact" data-dashboard-jump="settings"><span>Публичный адрес</span><strong id="portPublicAddress">--</strong><small>Домен и точка входа</small></button>
                 <button type="button" class="port-fact" data-dashboard-jump="traffic"><span>Текущая скорость</span><strong id="portCurrentRate">--</strong><small>Открыть историю трафика</small></button>
-                <button type="button" class="port-fact" data-dashboard-jump="settings"><span>DC в сети</span><strong id="portNetworkDc">1</strong><small>Настроить число узлов</small></button>
+                <button type="button" class="port-fact" data-dashboard-jump="health"><span>Здоровье DC</span><strong id="portNetworkDc">--</strong><small>Проверить маршруты Telegram</small></button>
                 <button type="button" class="port-fact" data-dashboard-jump="keys"><span>Подключения</span><strong id="portConnections">0</strong><small>Показать активные ключи</small></button>
                 <button type="button" class="port-fact" data-dashboard-jump="keys"><span>Активные IP</span><strong id="portActiveIps">0</strong><small>Посмотреть пользователей</small></button>
                 <button type="button" class="port-fact" data-dashboard-jump="logs"><span>Состояние входа</span><strong id="portIngressState">--</strong><small>Слушатель и маршрут публикации</small></button>
@@ -165,6 +166,66 @@
               </div>
               <div id="runtimeCards" class="runtime-grid"></div>
               <div id="runtimeIssues" class="issue-list"></div>
+            </section>
+          </div>
+        </section>
+
+        <section class="page-panel" data-page="health">
+          <section class="health-hero panel">
+            <div>
+              <p class="eyebrow" data-i18n="healthEyebrow">Diagnostics</p>
+              <h2 data-i18n="healthTitle">Network health</h2>
+              <p class="health-lead" data-i18n="healthLead">Checks the proxy engine, media transport, Middle-End pool and Telegram DC routes without exposing user addresses.</p>
+            </div>
+            <div class="health-overall" id="healthOverall">
+              <span class="health-orbit" aria-hidden="true"><i></i></span>
+              <div><small data-i18n="healthOverallLabel">Overall status</small><strong id="healthOverallText">--</strong><span id="healthCheckedAt">--</span></div>
+            </div>
+          </section>
+
+          <div class="health-summary-grid">
+            <article class="health-summary-card">
+              <span data-i18n="healthKernel">telemt kernel</span>
+              <strong id="healthKernelVersion">--</strong>
+              <small id="healthKernelHint">--</small>
+            </article>
+            <article class="health-summary-card">
+              <span data-i18n="healthMss">Media transport</span>
+              <strong id="healthMssValue">--</strong>
+              <small id="healthMssHint">--</small>
+            </article>
+            <article class="health-summary-card">
+              <span data-i18n="healthUpstream">Telegram upstream</span>
+              <strong id="healthUpstreamValue">--</strong>
+              <small id="healthUpstreamHint">--</small>
+            </article>
+            <article class="health-summary-card">
+              <span data-i18n="healthMe">Middle-End pool</span>
+              <strong id="healthMeValue">--</strong>
+              <small id="healthMeHint">--</small>
+            </article>
+          </div>
+
+          <div class="health-layout">
+            <section class="panel health-dc-panel">
+              <div class="panel-head">
+                <div>
+                  <p class="eyebrow" data-i18n="healthDcEyebrow">Telegram routes</p>
+                  <h2 data-i18n="healthDcTitle">Data centers</h2>
+                </div>
+                <span class="status-pill" id="healthDcSummary">--</span>
+              </div>
+              <div class="dc-health-grid" id="dcHealthGrid"></div>
+            </section>
+
+            <section class="panel health-issues-panel">
+              <div class="panel-head">
+                <div>
+                  <p class="eyebrow" data-i18n="healthAdviceEyebrow">Recommendations</p>
+                  <h2 data-i18n="healthAdviceTitle">What needs attention</h2>
+                </div>
+              </div>
+              <div class="health-issue-list" id="healthIssueList"></div>
             </section>
           </div>
         </section>

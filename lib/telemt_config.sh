@@ -1,5 +1,5 @@
 #!/bin/bash
-# GoTelegram v2.5.0 — Генерация TOML конфигурации для telemt
+# IGProxy v2.11.0 — генерация TOML-конфигурации для telemt
 
 # ── Популярные домены (не заблокированные в РФ) ──────────────────────────────
 QUICK_DOMAINS=(
@@ -28,7 +28,8 @@ QUICK_DOMAINS=(
 # ── Генерация TOML конфига (telemt v3 формат) ───────────────────────────────
 # v2.6.0: добавлены параметры маскировки, отлаженные на тестовом VPS 9 июня 2026 года.
 # Стабильно работает с telemt 3.4.15 как через VPN, так и под жёсткий DPI:
-#   * client_mss = "92" в [server] — узкий MSS-клэмп (MSS=92, segment_multiplier=16)
+#   * client_mss = "92" в [server] — узкий MSS только для handshake
+#   * client_mss_bulk = "1400" — нормальный MSS для фото, видео и файлов
 #   * mask_shape_hardening + buckets — padding для unknown SNI mask path
 #   * mask_timing_normalization 180-320ms — timing envelope для masking
 #   * server_hello_delay_min_ms = 20 (только min, без max — иначе Telegram-клиент дропает)
@@ -86,6 +87,7 @@ generate_telemt_toml() {
     # client_mss / timing / buckets / sh_delay / (опц.) tls_emulation из пресета.
     # Единый источник правды: и свежий install, и миграция зовут эту функцию.
     local client_mss="92"
+    local client_mss_bulk="1400"
     local sh_delay=20
     local tls_profiles='["modern_firefox_like", "compat_tls12"]'
     local reanim_synlimit_block="" reanim_timeouts_block="" reanim_tg_connect=""
@@ -128,6 +130,10 @@ generate_telemt_toml() {
         fi
     fi
     local client_mss_toml="\"${client_mss}\""
+    local client_mss_bulk_line=""
+    if [ -n "$client_mss" ]; then
+        client_mss_bulk_line="client_mss_bulk = \"${client_mss_bulk}\""
+    fi
 
 
     # telemt требует bucket_floor>0 при mask_shape_hardening=true (иначе
@@ -150,7 +156,7 @@ log_level = "normal"
 # Реаниматор (ME-recovery): авто-восстановление аплинка к Telegram.
 # Встроено в ядро telemt (single-endpoint outage mode + async refill). Пишем явно,
 # чтобы функция была активна и пережила перегенерацию конфига при обновлении.
-# Значения = дефолты ядра (тюнибельно). На 3.4.18+ активны; старое ядро ключи игнорит.
+# Значения = дефолты ядра (тюнибельно). На 3.4.25 активны.
 me_single_endpoint_outage_mode_enabled = true
 me_single_endpoint_outage_disable_quarantine = true
 me_single_endpoint_outage_backoff_min_ms = 250
@@ -177,6 +183,7 @@ max_connections = 5000
 metrics_listen = "127.0.0.1:9090"
 metrics_whitelist = ["127.0.0.1/32", "::1/128"]
 client_mss = ${client_mss_toml}
+${client_mss_bulk_line}
 
 [server.api]
 enabled = true

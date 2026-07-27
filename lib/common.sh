@@ -3,7 +3,7 @@
 # Colors, logging, spinner, system helpers, v1 compat, i18n-aware
 
 # ── Version ───────────────────────────────────────────────────────────────────
-GOTELEGRAM_VERSION="2.10.2"
+GOTELEGRAM_VERSION="2.11.0"
 GOTELEGRAM_NAME="IGProxy"
 
 # ── Пути ──────────────────────────────────────────────────────────────────────
@@ -11,7 +11,7 @@ GOTELEGRAM_DIR="/opt/gotelegram"
 GOTELEGRAM_CONFIG="$GOTELEGRAM_DIR/config.json"
 TELEMT_CONFIG="/etc/telemt/config.toml"
 TELEMT_BIN="/usr/local/bin/telemt"
-TELEMT_PINNED_VERSION="3.4.18"   # протестированная стабильная версия ядра (дефолт)
+TELEMT_PINNED_VERSION="3.4.25"   # протестированная стабильная версия ядра (дефолт)
 TELEMT_SERVICE="telemt"
 
 # Debian включает отдельные virtual hosts через sites-enabled, а стандартные

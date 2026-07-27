@@ -9,9 +9,12 @@ through an SSH tunnel; it must never be exposed directly on the public network.
 from __future__ import annotations
 
 import csv
+import concurrent.futures
 import fcntl
 import hashlib
+import ipaddress
 import json
+import math
 import mimetypes
 import os
 import re
@@ -21,6 +24,7 @@ import shutil
 import socket
 import subprocess
 import tempfile
+import threading
 import time
 import urllib.error
 import urllib.parse
@@ -36,6 +40,11 @@ STATIC_DIR = Path(os.getenv("GOTELEGRAM_ADMIN_STATIC", str(ADMIN_DIR / "static")
 
 GOTELEGRAM_CONFIG = Path(os.getenv("GOTELEGRAM_CONFIG", "/opt/gotelegram/config.json"))
 TELEMT_CONFIG = Path(os.getenv("TELEMT_CONFIG", "/etc/telemt/config.toml"))
+TELEMT_BIN = Path(os.getenv("TELEMT_BIN", "/usr/local/bin/telemt"))
+TELEMT_PROXY_CONFIG_V4 = Path(os.getenv(
+    "TELEMT_PROXY_CONFIG_V4",
+    "/var/lib/telemt/cache/proxy-config-v4.txt",
+))
 HISTORY_FILE = Path(os.getenv("GOTELEGRAM_STATS_HISTORY", "/opt/gotelegram/stats_history.csv"))
 USER_HISTORY_FILE = Path(os.getenv("GOTELEGRAM_USER_STATS_HISTORY", "/opt/gotelegram/user_stats_history.csv"))
 CURRENT_STATS = Path(os.getenv("GOTELEGRAM_STATS_CURRENT", "/run/gotelegram/stats_current.json"))
@@ -52,7 +61,7 @@ SITE_PRESETS_DIR = Path(os.getenv("GOTELEGRAM_SITE_PRESETS", "/opt/gotelegram/cu
 
 HOST = os.getenv("GOTELEGRAM_ADMIN_HOST", "127.0.0.1")
 PORT = int(os.getenv("GOTELEGRAM_ADMIN_PORT", "1984"))
-VERSION = "2.10.2"  # fallback only; live value read from config.json
+VERSION = "2.11.0"  # fallback only; live value read from config.json
 RUNTIME_COMMON_PATHS = (
     INSTALL_DIR / "current" / "lib" / "common.sh",
     Path(__file__).resolve().parents[1] / "lib" / "common.sh",
@@ -64,6 +73,10 @@ BACKUP_NAME_RE = re.compile(r"^[A-Za-z0-9_.-]+\.tar\.gz(\.(enc|gpg))?$")
 MAX_UNIQUE_IP_LIMIT = 1000000
 TELEMT_RESTART_DEBOUNCE_SECONDS = float(os.getenv("GOTELEGRAM_TELEMT_RESTART_DEBOUNCE", "8"))
 _LAST_TELEMT_RESTART = 0.0
+_HEALTH_CACHE: dict[str, Any] | None = None
+_HEALTH_CACHE_AT = 0.0
+_HEALTH_CACHE_SECONDS = float(os.getenv("GOTELEGRAM_HEALTH_CACHE_SECONDS", "15"))
+_HEALTH_LOCK = threading.Lock()
 TRAFFIC_WINDOWS = {
     "15m": 15 * 60,
     "1h": 60 * 60,
@@ -979,6 +992,320 @@ def telemt_api(path: str) -> Any:
         return None
 
 
+def read_telemt_health_settings() -> dict[str, Any]:
+    settings: dict[str, Any] = {
+        "use_middle_proxy": False,
+        "client_mss": "",
+        "client_mss_bulk": "",
+        "port": read_telemt_port(),
+    }
+    if not TELEMT_CONFIG.exists():
+        return settings
+    section = ""
+    for raw in TELEMT_CONFIG.read_text(encoding="utf-8", errors="ignore").splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        if line.startswith("[") and line.endswith("]"):
+            section = line.strip("[]")
+            continue
+        if "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        key = key.strip()
+        value = value.split("#", 1)[0].strip().strip('"').strip("'")
+        if section == "general" and key == "use_middle_proxy":
+            settings["use_middle_proxy"] = value.lower() == "true"
+        elif section == "server" and key in {"client_mss", "client_mss_bulk"}:
+            settings[key] = value
+        elif section == "server" and key == "port":
+            settings["port"] = _int_value(value) or settings["port"]
+    return settings
+
+
+def telemt_binary_version() -> str:
+    code, stdout, stderr = run([str(TELEMT_BIN), "--version"], timeout=3)
+    if code != 0:
+        return ""
+    match = re.search(r"\b(\d+\.\d+\.\d+)\b", stdout or stderr)
+    return match.group(1) if match else ""
+
+
+def _mss_number(value: Any) -> int:
+    raw = str(value or "").strip().lower()
+    presets = {"extreme-low": 88, "tspu": 92, "2in8": 256}
+    if raw in presets:
+        return presets[raw]
+    return _int_value(raw)
+
+
+def parse_telemt_metrics(text: str) -> dict[str, float]:
+    wanted = {
+        "telemt_connections_total",
+        "telemt_connections_bad_total",
+        "telemt_handshake_timeouts_total",
+        "telemt_upstream_connect_attempt_total",
+        "telemt_upstream_connect_success_total",
+        "telemt_upstream_connect_fail_total",
+        "telemt_me_reconnect_attempts_total",
+        "telemt_me_reconnect_success_total",
+    }
+    values: dict[str, float] = {}
+    for raw in text.splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        parts = line.split()
+        if len(parts) != 2:
+            continue
+        metric = parts[0].split("{", 1)[0]
+        if metric not in wanted:
+            continue
+        try:
+            value = float(parts[1])
+        except ValueError:
+            continue
+        if math.isfinite(value):
+            values[metric] = values.get(metric, 0.0) + value
+    return values
+
+
+def telemt_metrics_snapshot() -> dict[str, float]:
+    try:
+        with urllib.request.urlopen("http://127.0.0.1:9090/metrics", timeout=1.8) as resp:
+            payload = resp.read(512 * 1024)
+        return parse_telemt_metrics(payload.decode("utf-8", errors="replace"))
+    except Exception:
+        return {}
+
+
+def parse_telemt_dc_endpoints(text: str) -> list[dict[str, Any]]:
+    endpoints: list[dict[str, Any]] = []
+    seen: set[tuple[int, str, int]] = set()
+    pattern = re.compile(r"^\s*proxy_for\s+(-?\d+)\s+(\d{1,3}(?:\.\d{1,3}){3}):(\d+)\s*;")
+    for raw in text.splitlines():
+        match = pattern.match(raw)
+        if not match:
+            continue
+        dc = int(match.group(1))
+        host = match.group(2)
+        port = int(match.group(3))
+        try:
+            parsed = ipaddress.ip_address(host)
+        except ValueError:
+            continue
+        if parsed.version != 4 or not 1 <= port <= 65535:
+            continue
+        key = (dc, host, port)
+        if key in seen:
+            continue
+        seen.add(key)
+        endpoints.append({"dc": dc, "host": host, "port": port})
+    return endpoints
+
+
+def _probe_dc_endpoint(host: str, port: int, timeout: float = 0.9) -> dict[str, Any]:
+    started = time.monotonic()
+    try:
+        with socket.create_connection((host, port), timeout=timeout):
+            latency_ms = max(1, round((time.monotonic() - started) * 1000))
+        return {"reachable": True, "latency_ms": latency_ms, "error": ""}
+    except OSError as exc:
+        reason = "timeout" if isinstance(exc, TimeoutError) else "connect_failed"
+        return {"reachable": False, "latency_ms": 0, "error": reason}
+
+
+def telemt_dc_health() -> dict[str, Any]:
+    try:
+        source = TELEMT_PROXY_CONFIG_V4.read_text(encoding="utf-8", errors="ignore")
+    except OSError:
+        return {"available": False, "groups": [], "reachable": 0, "total": 0}
+    endpoints = parse_telemt_dc_endpoints(source)
+    unique = sorted({(item["host"], item["port"]) for item in endpoints})
+    results: dict[tuple[str, int], dict[str, Any]] = {}
+    if unique:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=min(8, len(unique))) as executor:
+            futures = {
+                executor.submit(_probe_dc_endpoint, host, port): (host, port)
+                for host, port in unique
+            }
+            for future, key in futures.items():
+                try:
+                    results[key] = future.result(timeout=1.5)
+                except Exception:
+                    results[key] = {"reachable": False, "latency_ms": 0, "error": "probe_failed"}
+
+    groups: list[dict[str, Any]] = []
+    for dc in sorted({item["dc"] for item in endpoints}, key=lambda value: (abs(value), value < 0)):
+        items = [item for item in endpoints if item["dc"] == dc]
+        checked = []
+        for item in items:
+            result = results.get((item["host"], item["port"]), {})
+            checked.append({
+                "address": f'{item["host"]}:{item["port"]}',
+                "reachable": bool(result.get("reachable")),
+                "latency_ms": _int_value(result.get("latency_ms")),
+            })
+        reachable = sum(1 for item in checked if item["reachable"])
+        groups.append({
+            "dc": dc,
+            "media": dc < 0,
+            "endpoints": checked,
+            "reachable": reachable,
+            "total": len(checked),
+            "status": "ok" if reachable else "error",
+        })
+    reachable_total = sum(1 for value in results.values() if value.get("reachable"))
+    return {
+        "available": True,
+        "groups": groups,
+        "reachable": reachable_total,
+        "total": len(unique),
+    }
+
+
+def _me_pool_snapshot() -> dict[str, Any]:
+    raw = telemt_api("/v1/runtime/me_pool_state")
+    if not isinstance(raw, dict):
+        return {"available": False}
+    outer = raw.get("data") if isinstance(raw.get("data"), dict) else raw
+    data = outer.get("data") if isinstance(outer.get("data"), dict) else outer
+    writers = data.get("writers") if isinstance(data.get("writers"), dict) else {}
+    generations = data.get("generations") if isinstance(data.get("generations"), dict) else {}
+    hardswap = data.get("hardswap") if isinstance(data.get("hardswap"), dict) else {}
+    health = writers.get("health") if isinstance(writers.get("health"), dict) else {}
+    return {
+        "available": True,
+        "enabled": bool(outer.get("enabled", True)),
+        "writers_total": _int_value(writers.get("total")),
+        "writers_healthy": _int_value(health.get("healthy")),
+        "writers_degraded": _int_value(health.get("degraded")),
+        "writers_draining": _int_value(health.get("draining")),
+        "active_generation": _int_value(generations.get("active_generation")),
+        "warm_generation": _int_value(generations.get("warm_generation")),
+        "hardswap_pending": bool(hardswap.get("pending")),
+        "hardswap_pending_age_secs": _int_value(generations.get("pending_hardswap_age_secs")),
+    }
+
+
+def health_payload(force: bool = False) -> dict[str, Any]:
+    global _HEALTH_CACHE, _HEALTH_CACHE_AT
+    now = time.monotonic()
+    if not force and _HEALTH_CACHE is not None and now - _HEALTH_CACHE_AT < _HEALTH_CACHE_SECONDS:
+        return _HEALTH_CACHE
+    with _HEALTH_LOCK:
+        now = time.monotonic()
+        if not force and _HEALTH_CACHE is not None and now - _HEALTH_CACHE_AT < _HEALTH_CACHE_SECONDS:
+            return _HEALTH_CACHE
+
+        service = service_status("telemt")
+        version = telemt_binary_version()
+        settings = read_telemt_health_settings()
+        handshake_mss = _mss_number(settings.get("client_mss"))
+        bulk_mss = _mss_number(settings.get("client_mss_bulk"))
+        multiplier = math.ceil(1460 / handshake_mss) if handshake_mss else 1
+        metrics = telemt_metrics_snapshot()
+        attempts = metrics.get("telemt_upstream_connect_attempt_total", 0.0)
+        success = metrics.get("telemt_upstream_connect_success_total", 0.0)
+        upstream_success_percent = round(success / attempts * 100, 1) if attempts else 0.0
+        connections = metrics.get("telemt_connections_total", 0.0)
+        handshake_timeouts = metrics.get("telemt_handshake_timeouts_total", 0.0)
+        handshake_timeout_percent = round(handshake_timeouts / connections * 100, 1) if connections else 0.0
+        me_pool = _me_pool_snapshot()
+        dc = telemt_dc_health()
+
+        issues: list[dict[str, str]] = []
+        if service != "running":
+            issues.append({
+                "level": "error",
+                "title": "Ядро telemt не работает",
+                "detail": "Прокси не принимает новые подключения.",
+                "action": "Проверьте службу telemt и журнал запуска.",
+            })
+        if version and version != "3.4.25":
+            issues.append({
+                "level": "warn",
+                "title": f"Установлен telemt {version}",
+                "detail": "Для IGProxy 2.11.0 проверена версия 3.4.25.",
+                "action": "Обновите ядро с резервной копией бинарника и конфига.",
+            })
+        if handshake_mss and not bulk_mss:
+            issues.append({
+                "level": "warn",
+                "title": "Узкий MSS применяется к медиа",
+                "detail": f"MSS {handshake_mss} увеличивает число пакетов примерно в {multiplier} раз.",
+                "action": "Задайте client_mss_bulk = 1400.",
+            })
+        failed_groups = [item for item in dc.get("groups", []) if item.get("status") == "error"]
+        for item in failed_groups:
+            label = f'DC {item["dc"]}'
+            issues.append({
+                "level": "warn",
+                "title": f"{label}: маршрут не ответил",
+                "detail": "Ни один опубликованный Telegram endpoint этой группы не ответил на текущую TCP-проверку.",
+                "action": "Если предупреждение держится постоянно и ME-пул деградирует, проверьте маршрут VPS или резервный egress.",
+            })
+        if me_pool.get("writers_degraded", 0) > 0:
+            issues.append({
+                "level": "warn",
+                "title": "Есть деградировавшие ME-каналы",
+                "detail": f'{me_pool["writers_degraded"]} из {me_pool.get("writers_total", 0)} writers требуют внимания.',
+                "action": "Сопоставьте недоступные DC и рост upstream timeout.",
+            })
+        if me_pool.get("hardswap_pending") and me_pool.get("hardswap_pending_age_secs", 0) > 300:
+            issues.append({
+                "level": "warn",
+                "title": "Обновление ME-пула задержалось",
+                "detail": f'Ожидание длится {me_pool["hardswap_pending_age_secs"]} с.',
+                "action": "Причина обычно в недоступном DC; перезапуск без исправления маршрута не поможет.",
+            })
+        if attempts and upstream_success_percent < 60:
+            issues.append({
+                "level": "warn",
+                "title": "Низкая успешность upstream",
+                "detail": f"Успешно {upstream_success_percent}% попыток подключения к Telegram.",
+                "action": "Проверьте недоступные DC и маршрут VPS до Telegram.",
+            })
+
+        overall = "ok"
+        if any(item["level"] == "error" for item in issues):
+            overall = "error"
+        elif issues:
+            overall = "warn"
+        payload = {
+            "checked_at": int(time.time()),
+            "overall": overall,
+            "service": service,
+            "kernel": {
+                "current": version,
+                "target": "3.4.25",
+                "ok": version == "3.4.25",
+            },
+            "transport": {
+                "port": settings.get("port", 443),
+                "use_middle_proxy": bool(settings.get("use_middle_proxy")),
+                "handshake_mss": handshake_mss,
+                "bulk_mss": bulk_mss,
+                "packet_multiplier": multiplier,
+                "split_mss": bool(handshake_mss and bulk_mss and bulk_mss > handshake_mss),
+            },
+            "upstream": {
+                "attempts": int(attempts),
+                "success": int(success),
+                "fail": int(metrics.get("telemt_upstream_connect_fail_total", 0.0)),
+                "success_percent": upstream_success_percent,
+                "handshake_timeouts": int(handshake_timeouts),
+                "handshake_timeout_percent": handshake_timeout_percent,
+            },
+            "me_pool": me_pool,
+            "dc": dc,
+            "issues": issues,
+        }
+        _HEALTH_CACHE = payload
+        _HEALTH_CACHE_AT = time.monotonic()
+        return payload
+
+
 def site_status(config: dict[str, Any] | None = None) -> dict[str, Any]:
     config = config or load_json(GOTELEGRAM_CONFIG, {}) or {}
     host = str(config.get("domain") or "").strip()
@@ -1629,6 +1956,10 @@ class AdminHandler(BaseHTTPRequestHandler):
         path = parsed.path
         if path == "/api/overview":
             self.send_json({"ok": True, "data": overview_payload()})
+        elif path == "/api/health":
+            qs = urllib.parse.parse_qs(parsed.query)
+            force = qs.get("force", ["0"])[0] == "1"
+            self.send_json({"ok": True, "data": health_payload(force=force)})
         elif path == "/api/users":
             users = read_user_records()
             latest = latest_user_stats()

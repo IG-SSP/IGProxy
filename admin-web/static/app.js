@@ -5,6 +5,7 @@ const i18n = {
   en: {
     brandSubtitle: "Local Admin",
     navDashboard: "Dashboard",
+    navHealth: "Health",
     navTraffic: "Traffic",
     navKeys: "Keys",
     navBackups: "Backups",
@@ -219,6 +220,8 @@ const i18n = {
     qrTitle: "Scan Telegram proxy",
     pageDashboardTitle: "Dashboard",
     pageDashboardKicker: "Local Admin",
+    pageHealthTitle: "Health",
+    pageHealthKicker: "Diagnostics",
     pageTrafficTitle: "Traffic",
     pageTrafficKicker: "Statistics",
     pageKeysTitle: "Keys",
@@ -229,10 +232,23 @@ const i18n = {
     pageLogsKicker: "Journal",
     pageSettingsTitle: "Settings",
     pageSettingsKicker: "Preferences",
+    healthEyebrow: "Diagnostics",
+    healthTitle: "Network health",
+    healthLead: "Checks the proxy engine, media transport, Middle-End pool and Telegram DC routes without exposing user addresses.",
+    healthOverallLabel: "Overall status",
+    healthKernel: "telemt kernel",
+    healthMss: "Media transport",
+    healthUpstream: "Telegram upstream",
+    healthMe: "Middle-End pool",
+    healthDcEyebrow: "Telegram routes",
+    healthDcTitle: "Data centers",
+    healthAdviceEyebrow: "Recommendations",
+    healthAdviceTitle: "What needs attention",
   },
   ru: {
     brandSubtitle: "Локальная админка",
     navDashboard: "Обзор",
+    navHealth: "Здоровье",
     navTraffic: "Трафик",
     navKeys: "Ключи",
     navBackups: "Бекапы",
@@ -477,6 +493,8 @@ const i18n = {
     qrTitle: "Сканирование прокси Telegram",
     pageDashboardTitle: "Обзор",
     pageDashboardKicker: "Локальная админка",
+    pageHealthTitle: "Здоровье",
+    pageHealthKicker: "Диагностика",
     pageTrafficTitle: "Трафик",
     pageTrafficKicker: "Статистика",
     pageKeysTitle: "Ключи",
@@ -487,6 +505,18 @@ const i18n = {
     pageLogsKicker: "Журнал",
     pageSettingsTitle: "Настройки",
     pageSettingsKicker: "Параметры",
+    healthEyebrow: "Диагностика",
+    healthTitle: "Здоровье сети",
+    healthLead: "Проверка ядра, транспорта медиа, пула Middle-End и маршрутов Telegram DC без раскрытия адресов пользователей.",
+    healthOverallLabel: "Общее состояние",
+    healthKernel: "Ядро telemt",
+    healthMss: "Транспорт медиа",
+    healthUpstream: "Связь с Telegram",
+    healthMe: "Пул Middle-End",
+    healthDcEyebrow: "Маршруты Telegram",
+    healthDcTitle: "Дата-центры",
+    healthAdviceEyebrow: "Рекомендации",
+    healthAdviceTitle: "Что требует внимания",
   },
 };
 
@@ -494,6 +524,7 @@ const AUTO_REFRESH_MS = 5000;
 
 const state = {
   overview: null,
+  health: null,
   stats: null,
   users: [],
   events: [],
@@ -530,6 +561,7 @@ const state = {
   themeMode: localStorage.getItem("igproxy-theme-mode") || "system",
   siteSettings: null,
   selectedSitePreset: "",
+  healthLoading: false,
 };
 
 const t = (key) => (i18n[state.lang] && i18n[state.lang][key]) || i18n.en[key] || key;
@@ -719,6 +751,7 @@ function applyI18n() {
   updateTrafficControls();
   updateUserTrafficControls();
   renderBackupSchedule();
+  if (state.health) renderHealth();
   updatePageTitle();
   updateAutoRefreshToggle();
 }
@@ -755,6 +788,8 @@ function setPage(page, push = true) {
   });
   if (next === "traffic") {
     refreshStats().catch((err) => toast(err.message));
+  } else if (next === "health" && !state.health) {
+    refreshHealth().catch((err) => toast(err.message));
   } else if (next === "keys") {
     ensureUserTrafficSelection();
     renderUserTraffic();
@@ -1002,6 +1037,79 @@ function renderPort443(payload = {}) {
   `;
 }
 
+function renderHealth() {
+  const data = state.health;
+  if (!data) return;
+  const overall = ["ok", "warn", "error"].includes(data.overall) ? data.overall : "warn";
+  const labels = { ok: "Всё работает", warn: "Есть замечания", error: "Требует вмешательства" };
+  const overallCard = $("#healthOverall");
+  overallCard.classList.remove("ok", "warn", "error");
+  overallCard.classList.add(overall);
+  $("#healthOverallText").textContent = labels[overall];
+  $("#healthCheckedAt").textContent = `Проверено ${fmtDate(data.checked_at)}`;
+
+  const kernel = data.kernel || {};
+  $("#healthKernelVersion").textContent = kernel.current || "не определено";
+  $("#healthKernelHint").textContent = kernel.ok ? `Проверенная версия ${kernel.target}` : `Целевая версия ${kernel.target || "3.4.25"}`;
+
+  const transport = data.transport || {};
+  const handshake = Number(transport.handshake_mss) || 0;
+  const bulk = Number(transport.bulk_mss) || 0;
+  $("#healthMssValue").textContent = handshake ? `${handshake} → ${bulk || "не задан"}` : "обычный MSS";
+  $("#healthMssHint").textContent = transport.split_mss
+    ? "handshake → контент; лишняя фрагментация медиа снята"
+    : "Для контента нужен отдельный крупный MSS";
+
+  const upstream = data.upstream || {};
+  const attempts = Number(upstream.attempts) || 0;
+  $("#healthUpstreamValue").textContent = attempts ? `${Number(upstream.success_percent || 0).toFixed(1)}%` : "нет данных";
+  $("#healthUpstreamHint").textContent = attempts
+    ? `${upstream.success || 0} успешно · ${upstream.fail || 0} ошибок`
+    : "Метрики появятся после новых подключений";
+
+  const me = data.me_pool || {};
+  $("#healthMeValue").textContent = me.available ? `${me.writers_healthy || 0} / ${me.writers_total || 0}` : "нет данных";
+  $("#healthMeHint").textContent = me.available
+    ? `${me.writers_degraded || 0} деградировали${me.hardswap_pending ? " · обновление пула ожидает" : ""}`
+    : "Локальный runtime API недоступен";
+
+  const dc = data.dc || {};
+  const groups = Array.isArray(dc.groups) ? dc.groups : [];
+  $("#healthDcSummary").textContent = dc.available ? `${dc.reachable || 0} / ${dc.total || 0} endpoint` : "нет конфигурации";
+  if (dc.available) $("#portNetworkDc").textContent = `${dc.reachable || 0}/${dc.total || 0}`;
+  const cards = groups.map((group) => {
+    const status = group.status === "ok" ? "ok" : "error";
+    const endpoints = (group.endpoints || []).map((endpoint) => `
+      <li class="${endpoint.reachable ? "ok" : "error"}">
+        <span>${escapeHtml(endpoint.address)}</span>
+        <strong>${endpoint.reachable ? `${endpoint.latency_ms || 1} мс` : "нет связи"}</strong>
+      </li>`).join("");
+    return `<article class="dc-health-card ${status}">
+      <header>
+        <div><strong>DC ${escapeHtml(group.dc)}</strong><small>${group.media ? "медиа" : "основной"}</small></div>
+        <span>${group.reachable || 0} / ${group.total || 0}</span>
+      </header>
+      <ul>${endpoints || "<li><span>Endpoint не опубликован</span></li>"}</ul>
+    </article>`;
+  }).join("");
+  stableHtml($("#dcHealthGrid"), cards || '<div class="health-empty">Маршруты Telegram пока не обнаружены.</div>');
+
+  const issues = Array.isArray(data.issues) ? data.issues : [];
+  const issueHtml = issues.map((issue) => `
+    <article class="health-issue ${escapeAttr(issue.level || "warn")}">
+      <span class="health-issue-mark" aria-hidden="true"></span>
+      <div>
+        <strong>${escapeHtml(issue.title)}</strong>
+        <p>${escapeHtml(issue.detail)}</p>
+        <small>${escapeHtml(issue.action)}</small>
+      </div>
+    </article>`).join("");
+  stableHtml(
+    $("#healthIssueList"),
+    issueHtml || '<div class="health-empty health-empty-ok"><strong>Замечаний нет</strong><span>Ядро, транспорт и доступные маршруты работают штатно.</span></div>',
+  );
+}
+
 function renderOverview() {
   const data = state.overview;
   if (!data) return;
@@ -1028,7 +1136,9 @@ function renderOverview() {
   const activeIps = state.users.reduce((sum, user) => sum + (Number(user.traffic?.active_unique_ips) || 0), 0);
   $("#portPublicAddress").textContent = `${cfg.domain || cfg.mask_host || "сервер"}:${cfg.port || 443}`;
   $("#portCurrentRate").textContent = `${fmtBytes(currentRate)}/с`;
-  $("#portNetworkDc").textContent = cfg.network_dc_count || 1;
+  $("#portNetworkDc").textContent = state.health?.dc?.available
+    ? `${state.health.dc.reachable || 0}/${state.health.dc.total || 0}`
+    : (cfg.network_dc_count || 1);
   $("#portConnections").textContent = liveConnections;
   $("#portActiveIps").textContent = activeIps;
   $("#networkDcCount").value = cfg.network_dc_count || 1;
@@ -1769,16 +1879,18 @@ async function refreshAll(options = {}) {
   const btn = $("#refreshBtn");
   if (!options.silent) btn.disabled = true;
   try {
-    const [overview, users, siteSettings] = await Promise.all([
+    const [overview, users, siteSettings, health] = await Promise.all([
       api("/api/overview"),
       api("/api/users"),
       api("/api/site/settings"),
+      api("/api/health"),
     ]);
     state.overview = overview;
     state.backupSchedule = state.overview.backup_schedule || state.backupSchedule;
     updateLanguageFromOverview(state.overview);
     state.users = users;
     state.siteSettings = siteSettings;
+    state.health = health;
     ensureUserTrafficSelection();
     if (!state.stats) {
       state.stats = {
@@ -1795,6 +1907,7 @@ async function refreshAll(options = {}) {
       };
     }
     renderOverview();
+    renderHealth();
     renderUsers();
     renderSiteSettings();
     if (state.page === "traffic") {
@@ -1809,6 +1922,18 @@ async function refreshAll(options = {}) {
     if (!options.silent) btn.disabled = false;
     state.refreshingAll = false;
     updateAutoRefreshToggle();
+  }
+}
+
+async function refreshHealth(options = {}) {
+  if (state.healthLoading) return state.health;
+  state.healthLoading = true;
+  try {
+    state.health = await api(`/api/health${options.force ? "?force=1" : ""}`);
+    renderHealth();
+    return state.health;
+  } finally {
+    state.healthLoading = false;
   }
 }
 

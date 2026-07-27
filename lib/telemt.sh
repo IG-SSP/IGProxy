@@ -75,7 +75,7 @@ telemt_target_version() {
     v=$(read_config_or_default telemt_version "" 2>/dev/null)
     [ -z "$v" ] && v="${TELEMT_VERSION_PREF:-}"
     case "$v" in
-        ""|recommended|pinned) echo "${TELEMT_PINNED_VERSION:-3.4.18}" ;;
+        ""|recommended|pinned) echo "${TELEMT_PINNED_VERSION:-3.4.25}" ;;
         latest)                get_latest_telemt_version ;;
         *)                     echo "$v" ;;
     esac
@@ -92,6 +92,7 @@ download_telemt() {
     fi
 
     local tmp_file="/tmp/telemt_download_$$"
+    local checksum_file="${tmp_file}.sha256"
     local extract_dir="/tmp/telemt_extract_$$"
     log_info "Скачивание telemt ${version}: $url"
 
@@ -101,12 +102,29 @@ download_telemt() {
         return 1
     fi
 
+    # Release-asset checksum is published next to every supported archive.
+    # Fail closed: silently installing an unverified proxy binary is not safe.
+    if ! curl -L -fsS --max-time 30 -o "$checksum_file" "${url}.sha256"; then
+        log_error "Не удалось скачать контрольную сумму telemt"
+        rm -f "$tmp_file" "$checksum_file"
+        return 1
+    fi
+    local expected_sha actual_sha
+    expected_sha=$(grep -oE '[a-fA-F0-9]{64}' "$checksum_file" | head -1 | tr 'A-F' 'a-f')
+    actual_sha=$(sha256sum "$tmp_file" 2>/dev/null | awk '{print $1}')
+    if [ -z "$expected_sha" ] || [ "$actual_sha" != "$expected_sha" ]; then
+        log_error "Контрольная сумма telemt не совпала"
+        rm -f "$tmp_file" "$checksum_file"
+        return 1
+    fi
+    log_dim "SHA-256 telemt подтверждён"
+
     # Проверяем что файл не пустой и не HTML
     local file_size
     file_size=$(stat -c%s "$tmp_file" 2>/dev/null || echo 0)
     if [ "$file_size" -lt 1000 ]; then
         log_error "Скачанный файл слишком маленький ($file_size байт) — возможна ошибка сети"
-        rm -f "$tmp_file"
+        rm -f "$tmp_file" "$checksum_file"
         return 1
     fi
 
@@ -151,7 +169,7 @@ download_telemt() {
 
     if [ -z "$extracted" ] || [ ! -f "$extracted" ]; then
         log_error "Не удалось извлечь бинарник telemt (mime: $mime)"
-        rm -f "$tmp_file"
+        rm -f "$tmp_file" "$checksum_file"
         rm -rf "$extract_dir"
         return 1
     fi
@@ -159,7 +177,7 @@ download_telemt() {
     # Устанавливаем
     cp "$extracted" "$TELEMT_BIN"
     chmod 755 "$TELEMT_BIN"
-    rm -f "$tmp_file"
+    rm -f "$tmp_file" "$checksum_file"
     rm -rf "$extract_dir"
 
     # Проверяем

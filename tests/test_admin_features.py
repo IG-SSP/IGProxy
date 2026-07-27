@@ -84,6 +84,76 @@ class AdminFeatureTests(unittest.TestCase):
         self.assertIn('id="diskGauge"', html)
         self.assertIn('id="userSearch"', html)
 
+    def test_health_page_and_api_client_are_present(self):
+        html = INDEX_PATH.read_text(encoding="utf-8")
+        script = APP_JS_PATH.read_text(encoding="utf-8")
+        styles = (ROOT / "admin-web" / "static" / "styles.css").read_text(encoding="utf-8")
+
+        self.assertIn('data-nav="health"', html)
+        self.assertIn('data-page="health"', html)
+        self.assertIn('id="dcHealthGrid"', html)
+        self.assertIn('api("/api/health")', script)
+        self.assertIn("function renderHealth()", script)
+        self.assertIn(".dc-health-card", styles)
+
+    def test_telemt_metrics_aggregate_labelled_series(self):
+        with tempfile.TemporaryDirectory() as raw:
+            server = load_server(Path(raw))
+            metrics = server.parse_telemt_metrics(
+                "\n".join([
+                    'telemt_upstream_connect_attempt_total{dc="1"} 4',
+                    'telemt_upstream_connect_attempt_total{dc="2"} 6',
+                    'telemt_upstream_connect_success_total{dc="1"} 3',
+                    "telemt_connections_total 12",
+                    "unrelated_metric 99",
+                ])
+            )
+
+        self.assertEqual(metrics["telemt_upstream_connect_attempt_total"], 10)
+        self.assertEqual(metrics["telemt_upstream_connect_success_total"], 3)
+        self.assertEqual(metrics["telemt_connections_total"], 12)
+        self.assertNotIn("unrelated_metric", metrics)
+
+    def test_health_payload_reports_split_mss_without_user_data(self):
+        with tempfile.TemporaryDirectory() as raw:
+            server = load_server(Path(raw))
+            server._HEALTH_CACHE = None
+            with (
+                mock.patch.object(server, "service_status", return_value="running"),
+                mock.patch.object(server, "telemt_binary_version", return_value="3.4.25"),
+                mock.patch.object(server, "read_telemt_health_settings", return_value={
+                    "port": 443,
+                    "use_middle_proxy": True,
+                    "client_mss": "92",
+                    "client_mss_bulk": "1400",
+                }),
+                mock.patch.object(server, "telemt_metrics_snapshot", return_value={
+                    "telemt_upstream_connect_attempt_total": 10,
+                    "telemt_upstream_connect_success_total": 9,
+                    "telemt_upstream_connect_fail_total": 1,
+                }),
+                mock.patch.object(server, "_me_pool_snapshot", return_value={
+                    "available": True,
+                    "writers_total": 4,
+                    "writers_healthy": 4,
+                    "writers_degraded": 0,
+                    "hardswap_pending": False,
+                }),
+                mock.patch.object(server, "telemt_dc_health", return_value={
+                    "available": True,
+                    "groups": [{"dc": 1, "status": "ok", "reachable": 1, "total": 1, "endpoints": []}],
+                    "reachable": 1,
+                    "total": 1,
+                }),
+            ):
+                payload = server.health_payload(force=True)
+
+        self.assertTrue(payload["transport"]["split_mss"])
+        self.assertEqual(payload["transport"]["handshake_mss"], 92)
+        self.assertEqual(payload["transport"]["bulk_mss"], 1400)
+        self.assertNotIn("users", json.dumps(payload))
+        self.assertNotIn("secret", json.dumps(payload))
+
     def test_admin_is_russian_only(self):
         html = INDEX_PATH.read_text(encoding="utf-8")
         script = APP_JS_PATH.read_text(encoding="utf-8")
