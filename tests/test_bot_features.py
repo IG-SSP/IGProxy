@@ -111,13 +111,21 @@ class BotFeatureTests(unittest.TestCase):
 
     def test_single_bot_separates_admin_and_client_access(self):
         source = BOT_PATH.read_text(encoding="utf-8")
-        self.assertIn("def get_client_menu()", source)
+        self.assertIn("def get_client_menu(*, admin_back: bool = False)", source)
         self.assertIn("WebAppInfo(url=item[\"url\"])", source)
         self.assertIn('callback_data="menu_client_servers"', source)
         self.assertIn('context.user_data["awaiting_client_server"]', source)
         self.assertIn("client_menu_text()", source)
         self.assertIn("if not is_user_allowed(user_id):", source)
         self.assertNotIn("IGPROXY_CLIENT_BOT", source)
+
+    def test_admin_can_preview_client_server_menu_and_go_back(self):
+        source = BOT_PATH.read_text(encoding="utf-8")
+        self.assertIn('callback_data="menu_client_view"', source)
+        self.assertIn('"menu_client_view": cb_client_view', source)
+        self.assertIn("get_client_menu(admin_back=True)", source)
+        self.assertIn('callback_data="menu_main"', source)
+        self.assertIn("‹ Назад в Управление", source)
 
     def test_brand_and_sponsor_are_loaded_from_shared_config(self):
         source = BOT_PATH.read_text(encoding="utf-8")

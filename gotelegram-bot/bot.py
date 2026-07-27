@@ -110,7 +110,7 @@ def _read_gotelegram_version() -> str:
                 return str(_v)
     except Exception:
         pass
-    return "2.12.0"
+    return "2.12.1"
 
 
 GOTELEGRAM_VERSION = _read_gotelegram_version()
@@ -589,6 +589,7 @@ def get_main_menu(user_id: Optional[int] = None) -> InlineKeyboardMarkup:
             InlineKeyboardButton(_t(user_id, "menu_admins"), callback_data="menu_admins"),
         ],
         [InlineKeyboardButton("🌐 Клиентские серверы", callback_data="menu_client_servers")],
+        [InlineKeyboardButton("👤 Клиентский вид", callback_data="menu_client_view")],
         [InlineKeyboardButton(_t(user_id, "menu_restart"), callback_data="menu_restart")],
         [InlineKeyboardButton(_t(user_id, "menu_close"), callback_data="close_menu")],
     ]
@@ -661,7 +662,7 @@ def client_menu_text() -> str:
     )
 
 
-def get_client_menu() -> Optional[InlineKeyboardMarkup]:
+def get_client_menu(*, admin_back: bool = False) -> Optional[InlineKeyboardMarkup]:
     rows = [
         [InlineKeyboardButton(
             f"🌐 {item['label']}",
@@ -676,6 +677,8 @@ def get_client_menu() -> Optional[InlineKeyboardMarkup]:
             f"♥ {appearance['sponsor_name']}",
             url=appearance["sponsor_url"],
         )])
+    if admin_back:
+        rows.append([InlineKeyboardButton("‹ Назад в Управление", callback_data="menu_main")])
     return InlineKeyboardMarkup(rows) if rows else None
 
 
@@ -720,6 +723,23 @@ async def cb_client_servers(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         query,
         text,
         reply_markup=admin_client_servers_keyboard(),
+        parse_mode="HTML",
+    )
+
+
+async def cb_client_view(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Show an administrator the exact client catalogue with a return button."""
+    query = update.callback_query
+    await query.answer()
+    servers = [item for item in get_client_servers() if item["enabled"]]
+    text = client_menu_text() if servers else (
+        f"{client_menu_text()}\n\n"
+        "Сейчас нет доступных серверов."
+    )
+    await safe_edit_message(
+        query,
+        text,
+        reply_markup=get_client_menu(admin_back=True),
         parse_mode="HTML",
     )
 
@@ -3359,6 +3379,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         "menu_admins": cb_menu_admins,
         "menu_users": cb_menu_users,
         "menu_client_servers": cb_client_servers,
+        "menu_client_view": cb_client_view,
         "client_server_add": cb_client_server_add,
         "backup_create": cb_backup_create,
         "backup_list": cb_backup_list,
