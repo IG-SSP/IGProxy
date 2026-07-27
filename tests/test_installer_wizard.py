@@ -110,6 +110,7 @@ installer_reserved_port_status 9091 telemt
         self.assertIn('generate_telemt_toml "$raw_secret" "$public_port" "pro"', install)
         self.assertIn('save_gotelegram_config "telemt" "pro" "$public_port"', install)
         self.assertIn('show_proxy_info_pro "$user_domain" "$faketls_secret" "$public_port" "$nginx_internal_port"', install)
+        self.assertIn('format_https_url "$user_domain" "$public_port"', install)
         self.assertIn('port=${public_port}', telemt)
 
     def test_bootstrap_contains_required_wizard_module(self):

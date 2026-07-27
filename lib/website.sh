@@ -333,6 +333,7 @@ setup_pro_mode() {
     local template_dir="$2"
     local proxy_port="${3:-443}"
     local email="${4:-}"
+    local public_port="${5:-443}"
 
     log_step "Настройка pro-режима"
 
@@ -367,7 +368,7 @@ setup_pro_mode() {
     # 8. Показываем благодарности авторам шаблонов
     show_credits
 
-    log_success "Pro-режим настроен: https://${domain}"
+    log_success "Сайт настроен: $(format_https_url "$domain" "$public_port")"
     return 0
 }
 

@@ -649,6 +649,7 @@ def routed_behind_443() -> list[dict[str, Any]]:
     config = load_json(GOTELEGRAM_CONFIG, {}) or {}
     mode = str(config.get("mode") or "")
     domain = str(config.get("domain") or "")
+    public_port = _int_value(config.get("port") or 443) or 443
     settings = read_telemt_edge_settings()
     shared = load_shared443_config()
     mask_port = int(settings.get("mask_port") or 0)
@@ -693,7 +694,7 @@ def routed_behind_443() -> list[dict[str, Any]]:
         routes.append({
             "role": "site",
             "proto": "HTTPS",
-            "public": f"{domain}:443",
+            "public": f"{domain}:{public_port}",
             "target": f"127.0.0.1:{mask_port}",
             "process": (site_listener or {}).get("process") or "nginx",
             "pid": (site_listener or {}).get("pid") or "",
@@ -718,7 +719,7 @@ def port_443_status() -> dict[str, Any]:
         "checked_at": int(time.time()),
         "configured_port": configured_port,
         "listeners": listeners,
-        "routes": routed_behind_443() if configured_port == 443 or shared.get("enabled") else [],
+        "routes": routed_behind_443(),
         "shared_443": shared,
         "ok": not errors,
         "error": "; ".join(errors[:2]),
@@ -781,7 +782,8 @@ def site_status(config: dict[str, Any] | None = None) -> dict[str, Any]:
         return {"host": "", "url": "", "http_code": 0, "ok": False, "checked": False, "error": "domain_missing"}
     if not re.match(r"^[A-Za-z0-9.-]{1,253}$", host) or ".." in host or host.startswith(".") or host.endswith("."):
         return {"host": host, "url": "", "http_code": 0, "ok": False, "checked": False, "error": "invalid_domain"}
-    url = f"https://{host}/"
+    port = _int_value(config.get("port") or 443) or 443
+    url = f"https://{host}{'' if port == 443 else f':{port}'}/"
     code, stdout, stderr = run(["curl", "-k", "-L", "-sS", "-o", "/dev/null", "-w", "%{http_code}", "--max-time", "8", url], timeout=10)
     raw_code = stdout.strip()
     try:

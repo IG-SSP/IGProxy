@@ -7,6 +7,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest import mock
 from pathlib import Path
 
 
@@ -42,6 +43,28 @@ class AdminFeatureTests(unittest.TestCase):
         self.assertIn("percent", metrics["memory"])
         self.assertIn("percent", metrics["disk"])
         self.assertGreaterEqual(metrics["uptime_seconds"], 0)
+
+    def test_site_status_uses_configured_alternate_public_port(self):
+        with tempfile.TemporaryDirectory() as raw:
+            server = load_server(Path(raw))
+            with mock.patch.object(server, "run", return_value=(0, "200", "")) as runner:
+                result = server.site_status({"domain": "example.com", "port": 9443})
+            self.assertEqual(result["url"], "https://example.com:9443/")
+            self.assertIn("https://example.com:9443/", runner.call_args.args[0])
+
+    def test_port_map_keeps_site_route_on_alternate_public_port(self):
+        with tempfile.TemporaryDirectory() as raw:
+            server = load_server(Path(raw))
+            with (
+                mock.patch.object(server, "load_json", return_value={"mode": "pro", "domain": "example.com", "port": 9443}),
+                mock.patch.object(server, "read_telemt_edge_settings", return_value={"mask_port": 8443, "tls_domain": "example.com", "dns_overrides": []}),
+                mock.patch.object(server, "load_shared443_config", return_value={"enabled": False}),
+                mock.patch.object(server, "collect_port_listeners", return_value=([], [])),
+                mock.patch.object(server, "read_telemt_port", return_value=9443),
+            ):
+                result = server.port_443_status()
+            self.assertEqual(result["configured_port"], 9443)
+            self.assertEqual(result["routes"][0]["public"], "example.com:9443")
 
     def test_dashboard_contains_system_gauges_and_key_search(self):
         html = INDEX_PATH.read_text(encoding="utf-8")

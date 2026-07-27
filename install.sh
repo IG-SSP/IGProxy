@@ -45,7 +45,7 @@ load_language "ru"
 
 # ── Главное меню (Compact Dashboard + 5 Top-Level Items) ──────────────────────
 show_main_menu() {
-    local proxy_status bot_status nginx_st mode domain secret port ip link ssl_expiry
+    local proxy_status bot_status nginx_st mode domain secret port ip link ssl_expiry mask_port site_url
     proxy_status=$(telemt_status)
     bot_status=$(bot_service_status)
     nginx_st=$(nginx_status 2>/dev/null || echo "stopped")
@@ -53,6 +53,7 @@ show_main_menu() {
     domain=$(config_get domain 2>/dev/null || echo "")
     secret=$(get_config_value secret 2>/dev/null || echo "")
     port=$(get_config_value port 2>/dev/null || echo "443")
+    mask_port=$(get_config_value mask_port "$TELEMT_CONFIG" 2>/dev/null || echo "8443")
     ip=$(get_server_ip 2>/dev/null || echo "N/A")
 
     local W=54
@@ -84,17 +85,18 @@ show_main_menu() {
         running) nginx_icon="●"; nginx_color="${GREEN}" ;;
         *)       nginx_icon="✗"; nginx_color="${RED}" ;;
     esac
-    echo -e "  ${nginx_icon}${nginx_color}${NC} $(t svc_nginx)     ${nginx_color}${nginx_st}${NC}    ${DIM}(127.0.0.1:8443)${NC}"
+    echo -e "  ${nginx_icon}${nginx_color}${NC} $(t svc_nginx)     ${nginx_color}${nginx_st}${NC}    ${DIM}(127.0.0.1:${mask_port})${NC}"
 
     # Site (pro)
     if [ "$mode" = "pro" ] && [ -n "$domain" ]; then
         local site_icon site_color
-        if curl -sk --max-time 3 "https://${domain}/" -o /dev/null 2>/dev/null; then
+        site_url=$(format_https_url "$domain" "$port")
+        if curl -sk --max-time 3 "${site_url}/" -o /dev/null 2>/dev/null; then
             site_icon="●"; site_color="${GREEN}"
         else
             site_icon="✗"; site_color="${RED}"
         fi
-        echo -e "  ${site_color}${site_icon}${NC} $(t svc_site)      ${site_color}https://${domain}${NC}"
+        echo -e "  ${site_color}${site_icon}${NC} $(t svc_site)      ${site_color}${site_url}${NC}"
 
         ssl_expiry=$(get_ssl_expiry "$domain" 2>/dev/null || echo "N/A")
         echo -e "  ${GREEN}●${NC} $(t svc_ssl)       ${DIM}$(tf ssl_until "$ssl_expiry")${NC}"
@@ -954,7 +956,7 @@ key${i} = \"$(generate_hex 32)\""
     fi
 
     # Сайт (nginx + certbot + шаблон)
-    setup_pro_mode "$user_domain" "$template_dir" "$nginx_internal_port" "$ssl_email" || {
+    setup_pro_mode "$user_domain" "$template_dir" "$nginx_internal_port" "$ssl_email" "$public_port" || {
         installer_transaction_rollback "не удалось настроить сайт или сертификат"
         return
     }
@@ -975,7 +977,7 @@ key${i} = \"$(generate_hex 32)\""
     installer_transaction_commit
 
     show_proxy_info_pro "$user_domain" "$faketls_secret" "$public_port" "$nginx_internal_port"
-    echo -e "  ${WHITE}$(t svc_site):${NC} ${GREEN}https://${user_domain}${NC}"
+    echo -e "  ${WHITE}$(t svc_site):${NC} ${GREEN}$(format_https_url "$user_domain" "$public_port")${NC}"
     log_success "$(tf install_done "$GOTELEGRAM_VERSION" "Свой домен и сайт")"
 
     log_dim "Сетевые sysctl, journald и firewall не изменялись. Оптимизацию можно запустить отдельно после проверки прокси."
@@ -989,8 +991,9 @@ menu_status() {
     local mode
     mode=$(config_get mode 2>/dev/null)
     if [ "$mode" = "pro" ]; then
-        local domain
+        local domain port
         domain=$(config_get domain 2>/dev/null)
+        port=$(config_get port 2>/dev/null || echo "443")
         if [ -n "$domain" ]; then
             local ssl_expiry
             ssl_expiry=$(get_ssl_expiry "$domain")
@@ -998,7 +1001,7 @@ menu_status() {
             nginx_st=$(nginx_status)
             echo -e "  ${WHITE}$(t svc_nginx):${NC}      ${nginx_st}"
             echo -e "  ${WHITE}$(t website_ssl_until)${NC}     ${ssl_expiry}"
-            echo -e "  ${WHITE}$(t svc_site):${NC}       https://${domain}"
+            echo -e "  ${WHITE}$(t svc_site):${NC}       $(format_https_url "$domain" "$port")"
             echo ""
         fi
     fi

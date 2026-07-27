@@ -741,6 +741,15 @@ generate_hex() {
     openssl rand -hex "$((len/2))" 2>/dev/null || head -c "$((len/2))" /dev/urandom | xxd -p | tr -d '\n'
 }
 
+format_https_url() {
+    local domain="$1" port="${2:-443}"
+    if [ "$port" = "443" ]; then
+        printf 'https://%s' "$domain"
+    else
+        printf 'https://%s:%s' "$domain" "$port"
+    fi
+}
+
 # ── Проверка домена ──────────────────────────────────────────────────────────
 validate_domain() {
     local domain="$1"

@@ -914,9 +914,9 @@ function renderPort443(payload = {}) {
     </article>`;
   }).join("") : `<div class="port-empty">${escapeHtml(t("port443NoRoutes"))}</div>`;
   list.innerHTML = `
-    <div class="port-section-label">${escapeHtml(t("port443PublicSection"))}</div>
+    <div class="port-section-label">${escapeHtml(`Публичный порт ${configuredPort}`)}</div>
     ${listenerHtml}
-    <div class="port-section-label">${escapeHtml(t("port443BehindSection"))}</div>
+    <div class="port-section-label">${escapeHtml(`За портом ${configuredPort}`)}</div>
     ${routeHtml}
   `;
 }
