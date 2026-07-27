@@ -10,6 +10,7 @@ CATALOG_PATH = ROOT / "templates_catalog.json"
 INSTALL_PATH = ROOT / "install.sh"
 ADMIN_INDEX_PATH = ROOT / "admin-web" / "static" / "index.html"
 ADMIN_JS_PATH = ROOT / "admin-web" / "static" / "app.js"
+RU_LANG_PATH = ROOT / "gotelegram-bot" / "lang" / "ru.json"
 
 
 class BotFeatureTests(unittest.TestCase):
@@ -75,6 +76,10 @@ class BotFeatureTests(unittest.TestCase):
         self.assertNotIn('callback_data="menu_share"', menu_body)
         self.assertIn('callback_data="restart_confirm"', source)
         self.assertIn('"restart_confirm": cb_restart_confirm', source)
+        self.assertLess(
+            menu_body.index('callback_data="menu_admins"'),
+            menu_body.index('callback_data="menu_restart"'),
+        )
 
     def test_admin_help_uses_pinned_local_tunnel_and_screenshot(self):
         source = BOT_PATH.read_text(encoding="utf-8")
@@ -85,6 +90,8 @@ class BotFeatureTests(unittest.TestCase):
         self.assertIn('callback_data="admin_web_termius"', source)
         self.assertIn('callback_data="admin_web_guide_delete"', source)
         self.assertIn("_delete_message_after(guide, 600)", source)
+        self.assertEqual(source.count("await remember_admin_web_hint(update, context, guide)"), 2)
+        self.assertIn("guide = await query.message.reply_text(", source)
         self.assertIn('InlineKeyboardButton("Открыть веб-админку"', source)
 
     def test_bot_has_persistent_launcher_and_tme_links(self):
@@ -94,7 +101,10 @@ class BotFeatureTests(unittest.TestCase):
         self.assertIn("ReplyKeyboardRemove", source)
         self.assertIn('"<b>IGProxy</b>\\n"', source)
         self.assertIn('"<i>Управление прокси</i>\\n\\n"', source)
-        self.assertIn('"— ключами\\n"', source)
+        self.assertIn('"— Ключами\\n"', source)
+        self.assertIn('"— Локальной веб‑админкой\\n\\n"', source)
+        self.assertIn('"Сделано <b>ИГ</b>—\\n\\n"', source)
+        self.assertIn('"menu_status": "🟢 Статус"', RU_LANG_PATH.read_text(encoding="utf-8"))
         self.assertIn("https://t.me/proxy?server=", source)
         self.assertNotIn('return f"tg://proxy?server=', source)
 

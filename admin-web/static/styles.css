@@ -1222,7 +1222,7 @@ h2 {
 
 .keys-list {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(min(680px, 100%), 1fr));
+  grid-template-columns: minmax(0, 1fr);
   gap: 12px;
 }
 
@@ -1233,7 +1233,7 @@ h2 {
   gap: 0;
   align-items: stretch;
   min-width: 0;
-  padding: 14px;
+  padding: 10px;
   border: 1px solid var(--line);
   border-radius: 8px;
   background: var(--panel);
@@ -1256,9 +1256,9 @@ h2 {
 .key-card-access {
   display: grid;
   align-content: center;
-  gap: 10px;
+  gap: 7px;
   min-width: 0;
-  padding: 2px 16px;
+  padding: 0 12px;
   border-right: 1px solid var(--line);
 }
 
@@ -1288,12 +1288,14 @@ h2 {
 
 .key-quick-actions {
   display: flex;
-  gap: 8px;
-  flex-wrap: wrap;
+  gap: 6px;
+  flex-wrap: nowrap;
 }
 
 .key-quick-actions button {
-  flex: 1 1 100px;
+  flex: 1 1 0;
+  min-height: 36px;
+  padding: 7px 9px;
 }
 
 .key-live-grid {
@@ -1962,6 +1964,20 @@ td small {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
+  .service-grid {
+    grid-template-columns: repeat(3, minmax(150px, 1fr));
+  }
+
+  .metric-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .grid-two {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 1180px) {
   .key-card {
     grid-template-columns: repeat(2, minmax(0, 1fr));
     grid-template-areas:
@@ -1974,18 +1990,6 @@ td small {
     border-top: 1px solid var(--line);
     padding-top: 12px;
     margin-top: 10px;
-  }
-
-  .service-grid {
-    grid-template-columns: repeat(3, minmax(150px, 1fr));
-  }
-
-  .metric-grid {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-
-  .grid-two {
-    grid-template-columns: 1fr;
   }
 }
 
@@ -2269,7 +2273,7 @@ td small {
 
 .port-facts {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(125px, 1fr));
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 10px;
   margin-top: 24px;
 }

@@ -11,7 +11,7 @@
       document.documentElement.dataset.theme = theme;
     }());
   </script>
-  <link rel="stylesheet" href="/styles.css?v=igproxy-0.8">
+  <link rel="stylesheet" href="/styles.css?v=igproxy-0.9">
 </head>
 <body>
   <div class="app-shell">
@@ -101,6 +101,7 @@
                 <button type="button" class="port-fact" data-dashboard-jump="settings"><span>DC в сети</span><strong id="portNetworkDc">1</strong><small>Настроить число узлов</small></button>
                 <button type="button" class="port-fact" data-dashboard-jump="keys"><span>Подключения</span><strong id="portConnections">0</strong><small>Показать активные ключи</small></button>
                 <button type="button" class="port-fact" data-dashboard-jump="keys"><span>Активные IP</span><strong id="portActiveIps">0</strong><small>Посмотреть пользователей</small></button>
+                <button type="button" class="port-fact" data-dashboard-jump="logs"><span>Состояние входа</span><strong id="portIngressState">--</strong><small>Слушатель и маршрут публикации</small></button>
               </div>
             </div>
             <div class="port-map" id="port443Map">

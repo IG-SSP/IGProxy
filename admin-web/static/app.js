@@ -959,16 +959,19 @@ function renderPort443(payload = {}) {
     summary.className = "port-status error";
     $("#portHealthBadge").textContent = "Ошибка";
     $("#portHealthBadge").className = "port-health-badge error";
+    $("#portIngressState").textContent = "Ошибка";
   } else if (!listeners.length) {
     summary.textContent = t("port443NoListeners");
     summary.className = "port-status warn";
     $("#portHealthBadge").textContent = "Нет слушателя";
     $("#portHealthBadge").className = "port-health-badge warn";
+    $("#portIngressState").textContent = "Не слушает";
   } else {
     summary.textContent = `${listeners.length} ${t("port443Listeners")}${routes.length ? ` · ${routes.length} ${t("port443Routes")}` : ""}`;
     summary.className = "port-status ok";
     $("#portHealthBadge").textContent = routes.length ? "Прокси и сайт работают" : "Прокси работает";
     $("#portHealthBadge").className = "port-health-badge ok";
+    $("#portIngressState").textContent = routes.length ? "Доступно" : "Только прокси";
   }
   const listenerHtml = listeners.length ? listeners.map((item) => {
     const title = `${item.proto || ""} ${item.address || ""} · ${item.process || "unknown"}${item.pid ? ` · pid ${item.pid}` : ""}`;

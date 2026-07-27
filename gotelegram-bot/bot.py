@@ -108,7 +108,7 @@ def _read_gotelegram_version() -> str:
                 return str(_v)
     except Exception:
         pass
-    return "2.10.0"
+    return "2.10.1"
 
 
 GOTELEGRAM_VERSION = _read_gotelegram_version()
@@ -584,9 +584,9 @@ def get_main_menu(user_id: Optional[int] = None) -> InlineKeyboardMarkup:
         ],
         [
             InlineKeyboardButton(_t(user_id, "menu_admin_web"), callback_data="menu_admin_web"),
-            InlineKeyboardButton(_t(user_id, "menu_restart"), callback_data="menu_restart"),
+            InlineKeyboardButton(_t(user_id, "menu_admins"), callback_data="menu_admins"),
         ],
-        [InlineKeyboardButton(_t(user_id, "menu_admins"), callback_data="menu_admins")],
+        [InlineKeyboardButton(_t(user_id, "menu_restart"), callback_data="menu_restart")],
         [InlineKeyboardButton(_t(user_id, "menu_close"), callback_data="close_menu")],
     ]
     return InlineKeyboardMarkup(buttons)
@@ -598,12 +598,12 @@ def main_menu_text() -> str:
         "<b>IGProxy</b>\n"
         "<i>Управление прокси</i>\n\n"
         "Этот бот управляет MTProxy:\n"
-        "— ключами\n"
-        "— нагрузкой и трафиком\n"
-        "— службами и бекапами\n"
-        "— локальной веб‑админкой\n\n"
+        "— Ключами\n"
+        "— Нагрузкой и трафиком\n"
+        "— Службами и бекапами\n"
+        "— Локальной веб‑админкой\n\n"
         "Основано на ядре <b>telemt</b>.\n"
-        "Сделано <b>ИГ</b>.\n\n"
+        "Сделано <b>ИГ</b>—\n\n"
         "Выберите действие:"
     )
 
@@ -2740,7 +2740,6 @@ async def cb_menu_admin_web(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     await query.answer()
     user_id = _uid(update)
     running = await check_service_status(ADMIN_WEB_SERVICE)
-    host = await admin_web_host_hint()
     local_url = f"http://127.0.0.1:{ADMIN_WEB_PORT}/"
     status = "запущена" if running else "не запущена"
     text = (
@@ -2793,19 +2792,9 @@ async def cb_admin_web_termius(update: Update, context: ContextTypes.DEFAULT_TYP
                         "Заполните поля как на схеме, а в Intermediate host выберите свой VPS. "
                         "Сохраните правило и нажмите на него, чтобы включить туннель."
                     ),
-                    reply_markup=InlineKeyboardMarkup([
-                        [InlineKeyboardButton(
-                            "Открыть веб-админку",
-                            url=f"http://127.0.0.1:{ADMIN_WEB_PORT}/",
-                        )],
-                        [InlineKeyboardButton(
-                            "Готово — удалить инструкцию",
-                            callback_data="admin_web_guide_delete",
-                        )],
-                    ]),
+                    reply_markup=admin_web_hint_keyboard(),
                 )
-            context.user_data["admin_web_guide_message_id"] = guide.message_id
-            asyncio.create_task(_delete_message_after(guide, 600))
+            await remember_admin_web_hint(update, context, guide)
         except TelegramError as exc:
             logger.warning("Failed to send Termius guide: %s", exc)
 
@@ -2820,30 +2809,57 @@ async def cb_admin_web_guide_delete(update: Update, context: ContextTypes.DEFAUL
         pass
 
 
+def admin_web_hint_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton(
+            "Открыть веб-админку",
+            url=f"http://127.0.0.1:{ADMIN_WEB_PORT}/",
+        )],
+        [InlineKeyboardButton(
+            "Готово — удалить инструкцию",
+            callback_data="admin_web_guide_delete",
+        )],
+    ])
+
+
+async def remember_admin_web_hint(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+    guide,
+) -> None:
+    """Give Termius and SSH hints the same replacement and cleanup lifecycle."""
+    previous_guide_id = context.user_data.pop("admin_web_guide_message_id", None)
+    if previous_guide_id and previous_guide_id != guide.message_id:
+        try:
+            await context.bot.delete_message(update.effective_chat.id, previous_guide_id)
+        except TelegramError:
+            pass
+    context.user_data["admin_web_guide_message_id"] = guide.message_id
+    asyncio.create_task(_delete_message_after(guide, 600))
+
+
 async def cb_admin_web_ssh(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     query = update.callback_query
     await query.answer()
     host = await admin_web_host_hint()
-    local_url = f"http://127.0.0.1:{ADMIN_WEB_PORT}/"
     ssh_cmd = (
         f"ssh -N -L 127.0.0.1:{ADMIN_WEB_PORT}:"
         f"127.0.0.1:{ADMIN_WEB_PORT} root@{host}"
     )
-    await safe_edit_message(
-        query,
+    if not query.message:
+        return
+    guide = await query.message.reply_text(
         (
             "<b>⌨️ Подключение через SSH</b>\n\n"
             "Скопируйте и запустите команду в терминале:\n\n"
             f"<code>{html.escape(ssh_cmd)}</code>\n\n"
             "Пока команда работает, откройте админку кнопкой ниже."
         ),
-        reply_markup=InlineKeyboardMarkup([
-            [InlineKeyboardButton("Открыть веб-админку", url=local_url)],
-            [InlineKeyboardButton("Назад к способам", callback_data="menu_admin_web")],
-        ]),
+        reply_markup=admin_web_hint_keyboard(),
         parse_mode="HTML",
         disable_web_page_preview=True,
     )
+    await remember_admin_web_hint(update, context, guide)
 
 
 # ============================================================================

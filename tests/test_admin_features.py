@@ -278,6 +278,8 @@ class AdminFeatureTests(unittest.TestCase):
         self.assertNotIn("td.actions", styles)
         self.assertIn('class="keys-list" id="usersTable"', index)
         self.assertNotIn('class="keys-table"', index)
+        self.assertIn(".keys-list {\n  display: grid;\n  grid-template-columns: minmax(0, 1fr);", styles)
+        self.assertIn("@media (max-width: 1180px)", styles)
 
     def test_topbar_has_five_second_auto_refresh_toggle(self):
         app_js = (ROOT / "admin-web" / "static" / "app.js").read_text(encoding="utf-8")
@@ -336,6 +338,9 @@ class AdminFeatureTests(unittest.TestCase):
         self.assertIn('id="proxyStatus"', html)
         self.assertIn('id="portConnections"', html)
         self.assertIn('id="portActiveIps"', html)
+        self.assertIn('id="portIngressState"', html)
+        self.assertEqual(html.count('class="port-fact"'), 6)
+        self.assertIn("grid-template-columns: repeat(3, minmax(0, 1fr));", styles)
         self.assertNotIn("без скачущих названий", script)
         self.assertIn("Причины сбоев", script)
 
