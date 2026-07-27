@@ -60,7 +60,7 @@ WEBSITE_ROOT = Path(os.getenv("GOTELEGRAM_WEBSITE_ROOT", "/var/www/gotelegram-si
 SITE_PRESETS_DIR = Path(os.getenv("GOTELEGRAM_SITE_PRESETS", "/opt/gotelegram/current/site-presets"))
 HOST = os.getenv("GOTELEGRAM_ADMIN_HOST", "127.0.0.1")
 PORT = int(os.getenv("GOTELEGRAM_ADMIN_PORT", "1984"))
-VERSION = "2.12.1"  # fallback only; live value read from config.json
+VERSION = "2.12.2"  # fallback only; live value read from config.json
 RUNTIME_COMMON_PATHS = (
     INSTALL_DIR / "current" / "lib" / "common.sh",
     Path(__file__).resolve().parents[1] / "lib" / "common.sh",
@@ -253,6 +253,19 @@ def _validate_public_url(value: str, *, telegram_only: bool = False) -> str:
     return value
 
 
+def _validate_proxy_url(value: str) -> str:
+    value = _validate_public_url(value)
+    parsed = urllib.parse.urlparse(value)
+    query = urllib.parse.parse_qs(parsed.query)
+    if (
+        parsed.hostname.lower() not in {"t.me", "telegram.me", "telegram.dog"}
+        or parsed.path.rstrip("/") != "/proxy"
+        or not all(query.get(key, [""])[0] for key in ("server", "port", "secret"))
+    ):
+        raise ValueError("нужна прямая ссылка вида https://t.me/proxy?server=...")
+    return value
+
+
 def client_servers_payload(config: dict[str, Any] | None = None) -> list[dict[str, Any]]:
     config = config or load_json(GOTELEGRAM_CONFIG, {}) or {}
     raw = config.get("client_servers")
@@ -265,7 +278,11 @@ def client_servers_payload(config: dict[str, Any] | None = None) -> list[dict[st
         label = str(item.get("label") or "").strip()[:48]
         url = str(item.get("url") or "").strip()
         item_id = re.sub(r"[^a-z0-9_-]", "", str(item.get("id") or "").lower())[:24]
-        if label and url:
+        try:
+            url = _validate_proxy_url(url)
+        except ValueError:
+            continue
+        if label:
             result.append({
                 "id": item_id or hashlib.sha256(f"{label}\0{url}".encode()).hexdigest()[:8],
                 "label": label,
@@ -288,7 +305,7 @@ def save_client_servers(raw: Any) -> list[dict[str, Any]]:
         label = str(item.get("label") or "").strip()
         if not label or len(label) > 48:
             raise ValueError("подпись сервера должна содержать от 1 до 48 символов")
-        url = _validate_public_url(str(item.get("url") or ""))
+        url = _validate_proxy_url(str(item.get("url") or ""))
         item_id = re.sub(r"[^a-z0-9_-]", "", str(item.get("id") or "").lower())[:24]
         while not item_id or item_id in used_ids:
             item_id = secrets.token_hex(4)
@@ -306,28 +323,16 @@ def save_client_servers(raw: Any) -> list[dict[str, Any]]:
     return servers
 
 
-MINI_APP_BRIDGE = """<!-- igproxy-mini-app -->
-<script src="https://telegram.org/js/telegram-web-app.js"></script>
-<script>
-(()=>{const w=window.Telegram&&window.Telegram.WebApp,a=document.getElementById("connect");
-if(!w||!a)return;w.ready();w.expand();a.addEventListener("click",e=>{
-const u=a.href;if(/^https:\\/\\/t\\.me\\/proxy\\?/i.test(u)){e.preventDefault();w.openTelegramLink(u);}
-});})();
-</script>"""
+LEGACY_WEBAPP_BRIDGE_RE = re.compile(
+    r"\s*<!-- igproxy-mini-app -->\s*"
+    r'<script src="https://telegram\.org/js/telegram-web-app\.js"></script>\s*'
+    r"<script>.*?</script>",
+    flags=re.IGNORECASE | re.DOTALL,
+)
 
 
-def add_mini_app_bridge(source: str) -> str:
-    if "igproxy-mini-app" in source:
-        return source
-    if re.search(r"</body\s*>", source, flags=re.IGNORECASE):
-        return re.sub(
-            r"</body\s*>",
-            MINI_APP_BRIDGE + "\n</body>",
-            source,
-            count=1,
-            flags=re.IGNORECASE,
-        )
-    return source + "\n" + MINI_APP_BRIDGE
+def remove_legacy_webapp_bridge(source: str) -> str:
+    return LEGACY_WEBAPP_BRIDGE_RE.sub("", source)
 
 
 SITE_PRESETS = {
@@ -485,7 +490,7 @@ def apply_site_preset(preset: str, key_name: str) -> dict[str, Any]:
                 .replace("__PROXY_LINK__", link)
                 .replace("__LAYOUT__", str(definition.get("layout") or "auto"))
             )
-            page.write_text(add_mini_app_bridge(rendered), encoding="utf-8")
+            page.write_text(remove_legacy_webapp_bridge(rendered), encoding="utf-8")
         return _publish_site_stage(stage, preset, key_name)
     except Exception:
         if not WEBSITE_ROOT.exists() and previous.exists():
@@ -515,7 +520,7 @@ def apply_custom_site(html_source: str, key_name: str) -> dict[str, Any]:
     previous = WEBSITE_ROOT.parent / ".igproxy-site-previous"
     try:
         (stage / "index.html").write_text(
-            add_mini_app_bridge(source.replace("__PROXY_LINK__", link)),
+            remove_legacy_webapp_bridge(source.replace("__PROXY_LINK__", link)),
             encoding="utf-8",
         )
         return _publish_site_stage(stage, "custom", key_name)
@@ -1340,7 +1345,7 @@ def health_payload(force: bool = False) -> dict[str, Any]:
             issues.append({
                 "level": "warn",
                 "title": f"Установлен telemt {version}",
-                "detail": "Для IGProxy 2.12.1 проверена версия 3.4.25.",
+                "detail": "Для IGProxy 2.12.2 проверена версия 3.4.25.",
                 "action": "Обновите ядро с резервной копией бинарника и конфига.",
             })
         if handshake_mss and not bulk_mss:
@@ -2501,12 +2506,12 @@ def main() -> None:
     else:
         try:
             source = published_index.read_text(encoding="utf-8")
-            upgraded = add_mini_app_bridge(source)
+            upgraded = remove_legacy_webapp_bridge(source)
             if upgraded != source:
                 published_index.write_text(upgraded, encoding="utf-8")
                 os.chmod(published_index, 0o644)
         except OSError as exc:
-            print(f"IGProxy Mini App bridge was not added: {exc}")
+            print(f"IGProxy legacy Web App bridge was not removed: {exc}")
     httpd = ThreadingHTTPServer((HOST, PORT), AdminHandler)
     print(f"IGProxy admin listening on http://{HOST}:{PORT}")
     httpd.serve_forever()

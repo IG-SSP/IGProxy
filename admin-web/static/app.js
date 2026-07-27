@@ -1902,7 +1902,7 @@ function renderClientServers() {
   list.innerHTML = state.clientServers.map((item, index) => `
     <div class="client-server-row" data-client-server="${index}">
       <label>Подпись<input data-server-label type="text" maxlength="48" value="${escapeAttr(item.label || "")}" placeholder="Амстердам"></label>
-      <label>HTTPS-витрина<input data-server-url type="url" value="${escapeAttr(item.url || "")}" placeholder="https://proxy.example.com"></label>
+      <label>Ссылка подключения<input data-server-url type="url" value="${escapeAttr(item.url || "")}" placeholder="https://t.me/proxy?server=..."></label>
       <label class="setting-check"><input data-server-enabled type="checkbox" ${item.enabled !== false ? "checked" : ""}> Показывать</label>
       <button type="button" class="danger soft" data-remove-client-server="${index}">Удалить</button>
       <input data-server-id type="hidden" value="${escapeAttr(item.id || "")}">

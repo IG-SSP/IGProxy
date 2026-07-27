@@ -433,14 +433,15 @@ class AdminFeatureTests(unittest.TestCase):
         self.assertIn("/api/client-servers", server)
         self.assertIn("save_client_servers", server)
         self.assertIn("renderClientServers", script)
-        self.assertIn("add_mini_app_bridge", server)
+        self.assertIn("remove_legacy_webapp_bridge", server)
+        self.assertNotIn("add_mini_app_bridge", server)
 
     def test_client_server_settings_validate_https_and_preserve_custom_labels(self):
         with tempfile.TemporaryDirectory() as raw:
             server = load_server(Path(raw))
             saved = server.save_client_servers([
-                {"label": "Амстердам · быстрый", "url": "https://ams.example.com", "enabled": True},
-                {"label": "Резерв", "url": "https://backup.example.com/path", "enabled": False},
+                {"label": "Амстердам · быстрый", "url": "https://t.me/proxy?server=ams.example.com&port=443&secret=aaaa", "enabled": True},
+                {"label": "Резерв", "url": "https://telegram.me/proxy?server=backup.example.com&port=9443&secret=bbbb", "enabled": False},
             ])
             self.assertEqual(saved[0]["label"], "Амстердам · быстрый")
             self.assertTrue(saved[0]["id"])
@@ -448,6 +449,10 @@ class AdminFeatureTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 server.save_client_servers([
                     {"label": "Локальный", "url": "http://127.0.0.1:8080", "enabled": True},
+                ])
+            with self.assertRaises(ValueError):
+                server.save_client_servers([
+                    {"label": "Не прокси", "url": "https://example.com/", "enabled": True},
                 ])
 
     def test_dashboard_uses_full_width_and_operational_status_cards(self):

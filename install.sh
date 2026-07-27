@@ -322,7 +322,7 @@ detect_template_source() {
 
 write_normalized_gotelegram_config() {
     local mode="$1" port="$2" secret="$3" mask_host="$4" domain="$5" tpl_id="$6" tpl_source="$7"
-    local lang installed_at stats_enabled tmp existing_config client_servers site_url
+    local lang installed_at stats_enabled tmp existing_config client_servers proxy_url server_label raw_proxy_url
     lang=$(read_config_or_default language "$(get_language 2>/dev/null || echo en)")
     installed_at=$(read_config_or_default installed_at "$(date -Iseconds)")
     stats_enabled=$(read_config_or_default stats_enabled "")
@@ -339,17 +339,28 @@ write_normalized_gotelegram_config() {
     client_servers=$(printf '%s' "$existing_config" | jq -c '
         .client_servers // [] | if type == "array" then . else [] end
     ' 2>/dev/null || echo '[]')
-    if [ "$(printf '%s' "$client_servers" | jq 'length' 2>/dev/null || echo 0)" = "0" ] && \
-       [ "$mode" = "pro" ] && [ -n "$domain" ]; then
-        if [ "$port" = "443" ]; then
-            site_url="https://${domain}"
-        else
-            site_url="https://${domain}:${port}"
-        fi
+    if [ "$mode" = "pro" ] && [ -n "$domain" ]; then
+        server_label="$domain"
+        raw_proxy_url=$(generate_proxy_link "$domain" "$port" "$secret" "$domain")
+    else
+        server_label=$(get_server_ip)
+        raw_proxy_url=$(generate_proxy_link "$server_label" "$port" "$secret" "$mask_host")
+    fi
+    proxy_url="https://t.me/proxy?${raw_proxy_url#tg://proxy?}"
+    client_servers=$(printf '%s' "$client_servers" | jq -c \
+        --arg url "$proxy_url" \
+        'map(
+            if ((.id // "") == "local") and
+               (((.url // "") | test("^https://(t\\.me|telegram\\.me|telegram\\.dog)/proxy\\?")) | not)
+            then .url = $url
+            else .
+            end
+        )')
+    if [ "$(printf '%s' "$client_servers" | jq 'length' 2>/dev/null || echo 0)" = "0" ]; then
         client_servers=$(jq -n \
             --arg id "local" \
-            --arg label "$domain" \
-            --arg url "$site_url" \
+            --arg label "$server_label" \
+            --arg url "$proxy_url" \
             '[{id: $id, label: $label, url: $url, enabled: true}]')
     fi
     tmp=$(mktemp) || return 1

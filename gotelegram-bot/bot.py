@@ -26,7 +26,7 @@ from datetime import datetime
 from io import StringIO
 from pathlib import Path
 from typing import Tuple, Optional, List, Dict, Any
-from urllib.parse import quote, urlparse
+from urllib.parse import parse_qs, quote, urlparse
 
 from dotenv import load_dotenv
 from telegram import (
@@ -35,7 +35,6 @@ from telegram import (
     InlineKeyboardMarkup,
     ReplyKeyboardMarkup,
     ReplyKeyboardRemove,
-    WebAppInfo,
 )
 from telegram.ext import (
     Application,
@@ -110,7 +109,7 @@ def _read_gotelegram_version() -> str:
                 return str(_v)
     except Exception:
         pass
-    return "2.12.1"
+    return "2.12.2"
 
 
 GOTELEGRAM_VERSION = _read_gotelegram_version()
@@ -642,7 +641,7 @@ def get_client_servers() -> List[Dict[str, Any]]:
         label = str(item.get("label") or "").strip()[:48]
         url = str(item.get("url") or "").strip()
         item_id = re.sub(r"[^a-z0-9_-]", "", str(item.get("id") or "").lower())[:24]
-        if label and url.startswith("https://"):
+        if label and is_proxy_url(url):
             result.append({
                 "id": item_id or hashlib.sha256(f"{label}\0{url}".encode()).hexdigest()[:8],
                 "label": label,
@@ -652,13 +651,24 @@ def get_client_servers() -> List[Dict[str, Any]]:
     return result
 
 
+def is_proxy_url(value: str) -> bool:
+    parsed = urlparse(value)
+    query = parse_qs(parsed.query)
+    return (
+        parsed.scheme == "https"
+        and (parsed.hostname or "").lower() in {"t.me", "telegram.me", "telegram.dog"}
+        and parsed.path.rstrip("/") == "/proxy"
+        and all(query.get(key, [""])[0] for key in ("server", "port", "secret"))
+    )
+
+
 def client_menu_text() -> str:
     appearance = get_appearance()
     title = appearance["brand_name"] if appearance["brand_enabled"] else "Доступ к прокси"
     return (
         f"<b>{html.escape(title)}</b>\n"
         "<i>Выбор сервера</i>\n\n"
-        "Выберите доступный узел. Сайт откроется внутри Telegram."
+        "Выберите сервер — Telegram сразу предложит подключить прокси."
     )
 
 
@@ -666,7 +676,7 @@ def get_client_menu(*, admin_back: bool = False) -> Optional[InlineKeyboardMarku
     rows = [
         [InlineKeyboardButton(
             f"🌐 {item['label']}",
-            web_app=WebAppInfo(url=item["url"]),
+            url=item["url"],
         )]
         for item in get_client_servers()
         if item["enabled"]
@@ -716,7 +726,7 @@ async def cb_client_servers(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     text = (
         "<b>🌐 Клиентские серверы</b>\n\n"
         "Обычные пользователи видят только включённые кнопки. "
-        "Формат Mini App требует публичную HTTPS-витрину.\n\n"
+        "Каждая кнопка содержит прямую ссылку подключения https://t.me/proxy.\n\n"
         f"Настроено серверов: <b>{len(servers)}</b>"
     )
     await safe_edit_message(
@@ -752,8 +762,7 @@ async def cb_client_server_add(update: Update, context: ContextTypes.DEFAULT_TYP
         query,
         "<b>Новый клиентский сервер</b>\n\n"
         "Пришлите одной строкой:\n"
-        "<code>Подпись кнопки | https://домен</code>\n\n"
-        "Например:\n<code>Амстердам · быстрый | https://ams.example.com</code>",
+        "<code>Подпись кнопки | https://t.me/proxy?...</code>",
         reply_markup=InlineKeyboardMarkup([[
             InlineKeyboardButton("Отмена", callback_data="menu_client_servers"),
         ]]),
@@ -772,7 +781,7 @@ async def cb_client_server_view(update: Update, context: ContextTypes.DEFAULT_TY
     text = (
         f"<b>{html.escape(item['label'])}</b>\n\n"
         f"Состояние: {'показывается клиентам' if item['enabled'] else 'скрыт'}\n"
-        f"Витрина: {html.escape(item['url'])}"
+        f"Ссылка подключения: {html.escape(item['url'])}"
     )
     keyboard = InlineKeyboardMarkup([
         [
@@ -801,7 +810,7 @@ async def cb_client_server_edit(update: Update, context: ContextTypes.DEFAULT_TY
         query,
         "<b>Изменение сервера</b>\n\n"
         "Пришлите новые данные:\n"
-        "<code>Подпись кнопки | https://домен</code>",
+        "<code>Подпись кнопки | https://t.me/proxy?...</code>",
         reply_markup=InlineKeyboardMarkup([[
             InlineKeyboardButton("Отмена", callback_data=f"client_server_view_{item_id}"),
         ]]),
@@ -3468,16 +3477,15 @@ async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE
         raw = update.message.text.strip()
         if "|" not in raw:
             await update.message.reply_text(
-                "Нужен формат: <code>Подпись | https://домен</code>",
+                "Нужен формат: <code>Подпись | https://t.me/proxy?...</code>",
                 parse_mode="HTML",
             )
             context.user_data["awaiting_client_server"] = pending_server
             return
         label, url = (part.strip() for part in raw.split("|", 1))
-        parsed = urlparse(url)
-        if not label or len(label) > 48 or parsed.scheme != "https" or not parsed.hostname:
+        if not label or len(label) > 48 or not is_proxy_url(url):
             await update.message.reply_text(
-                "Проверьте подпись и публичную HTTPS-ссылку.",
+                "Проверьте подпись и прямую ссылку https://t.me/proxy.",
             )
             context.user_data["awaiting_client_server"] = pending_server
             return

@@ -33,6 +33,9 @@ class InstallerWizardTests(unittest.TestCase):
         self.assertIn("$existing_config + {", source)
         self.assertIn("--argjson client_servers", source)
         self.assertIn('{id: $id, label: $label, url: $url, enabled: true}', source)
+        self.assertIn('proxy_url="https://t.me/proxy?', source)
+        self.assertIn('generate_proxy_link "$domain" "$port" "$secret" "$domain"', source)
+        self.assertIn('((.id // "") == "local")', source)
 
     def test_free_443_is_recommended(self):
         result = run_bash(
