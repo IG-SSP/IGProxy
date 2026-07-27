@@ -1,30 +1,121 @@
 #!/bin/bash
 # goTelegram Pro v2.5.0 — backup and restore (i18n-aware)
 
+BACKUP_PASSPHRASE_FILE="${BACKUP_PASSPHRASE_FILE:-/etc/gotelegram/backup.passphrase}"
+
+ensure_backup_passphrase_file() {
+    if [ ! -f "$BACKUP_PASSPHRASE_FILE" ]; then
+        mkdir -p -m 700 "$(dirname "$BACKUP_PASSPHRASE_FILE")"
+        umask 077
+        {
+            printf 'gotelegram-'
+            openssl rand -base64 36 | tr -d '\n'
+            printf '\n'
+        } > "$BACKUP_PASSPHRASE_FILE" || return 1
+    fi
+    chmod 600 "$BACKUP_PASSPHRASE_FILE" 2>/dev/null || return 1
+}
+
+backup_secure_cleanup() {
+    local path="${1:-}"
+    case "$path" in
+        /tmp/gotelegram-backup.*|/tmp/gotelegram-restore.*)
+            [ -n "$path" ] && rm -rf -- "$path"
+            ;;
+    esac
+}
+
+backup_archive_paths_are_safe() {
+    local archive="$1"
+    tar tzf "$archive" 2>/dev/null | awk '
+        BEGIN { ok=1 }
+        /^\// { ok=0 }
+        /(^|\/)\.\.(\/|$)/ { ok=0 }
+        /\\/ { ok=0 }
+        END { exit(ok ? 0 : 1) }
+    '
+}
+
+backup_verify_checksum() {
+    local backup_file="$1"
+    local checksum_file="${backup_file}.sha256"
+    if [ ! -f "$checksum_file" ]; then
+        log_error "Рядом с архивом нет файла контроля целостности: $(basename "$checksum_file")"
+        return 1
+    fi
+    (
+        cd "$(dirname "$backup_file")" &&
+        sha256sum -c "$(basename "$checksum_file")" >/dev/null 2>&1
+    )
+}
+
+create_backup_from_password_file() {
+    local password_file="${1:-$BACKUP_PASSPHRASE_FILE}"
+    [ -f "$password_file" ] || {
+        log_error "Не найден ключ плановых бэкапов: $password_file"
+        return 1
+    }
+    [ "$(stat -c '%a' "$password_file" 2>/dev/null)" = "600" ] || {
+        log_error "Ключ бэкапов должен иметь права 600: $password_file"
+        return 1
+    }
+    local password
+    IFS= read -r password < "$password_file"
+    [ ${#password} -ge 16 ] || {
+        log_error "Ключ плановых бэкапов слишком короткий"
+        return 1
+    }
+    create_backup "$password"
+    password=""
+}
+
+restore_backup_from_password_file() {
+    local backup_file="$1"
+    local password_file="${2:-$BACKUP_PASSPHRASE_FILE}"
+    local assume_yes="${3:-}"
+    [ -f "$password_file" ] || {
+        log_error "Не найден ключ бэкапа: $password_file"
+        return 1
+    }
+    [ "$(stat -c '%a' "$password_file" 2>/dev/null)" = "600" ] || {
+        log_error "Ключ бэкапа должен иметь права 600: $password_file"
+        return 1
+    }
+    local password
+    IFS= read -r password < "$password_file"
+    restore_backup "$backup_file" "$password" "$assume_yes"
+    local result=$?
+    password=""
+    return "$result"
+}
+
 # ── Создание бекапа ──────────────────────────────────────────────────────────
 create_backup() {
     local password="$1"
     local output_dir="${2:-$BACKUP_DIR}"
+    umask 077
     local timestamp
     timestamp=$(date +%Y%m%d_%H%M%S)
-    local backup_name tmp_dir suffix=0
+    local backup_name work_dir tmp_dir suffix=0
 
-    mkdir -p "$output_dir"
+    mkdir -p -m 700 "$output_dir"
+    chmod 700 "$output_dir" 2>/dev/null || true
+    work_dir=$(mktemp -d /tmp/gotelegram-backup.XXXXXX) || return 1
     while true; do
         if [ "$suffix" -eq 0 ]; then
             backup_name="gotelegram_backup_${timestamp}"
         else
             backup_name="gotelegram_backup_${timestamp}_${suffix}"
         fi
-        tmp_dir="/tmp/${backup_name}"
-        if [ ! -e "$tmp_dir" ] && \
-           [ ! -e "${output_dir}/${backup_name}.tar.gz" ] && \
+        tmp_dir="${work_dir}/${backup_name}"
+        if [ ! -e "${output_dir}/${backup_name}.tar.gz" ] && \
+           [ ! -e "${output_dir}/${backup_name}.tar.gz.gpg" ] && \
            [ ! -e "${output_dir}/${backup_name}.tar.gz.enc" ]; then
             break
         fi
         suffix=$((suffix + 1))
     done
-    mkdir -p "$tmp_dir"
+    mkdir -p -m 700 "$tmp_dir"
 
     # Собираем файлы
     log_info "$(_t_or backup_collecting 'Собираю конфигурацию...')"
@@ -137,43 +228,56 @@ create_backup() {
 EOMETA
 
     # Архивируем
-    local tar_file="/tmp/${backup_name}.tar.gz"
-    if ! tar czf "$tar_file" -C /tmp "$backup_name" 2>/dev/null; then
+    local tar_file="${work_dir}/${backup_name}.tar.gz"
+    if ! tar czf "$tar_file" -C "$work_dir" "$backup_name" 2>/dev/null; then
         log_error "$(_t_or backup_archive_err 'Ошибка создания архива')"
-        rm -rf "$tmp_dir"
-        rm -f "$tar_file"
+        backup_secure_cleanup "$work_dir"
         return 1
     fi
 
     if [ ! -f "$tar_file" ]; then
         log_error "$(_t_or backup_archive_missing 'Архив не создан')"
-        rm -rf "$tmp_dir"
+        backup_secure_cleanup "$work_dir"
         return 1
     fi
 
     # Шифруем если задан пароль
     local final_file=""
     if [ -n "$password" ]; then
-        final_file="${output_dir}/${backup_name}.tar.gz.enc"
-        openssl enc -aes-256-cbc -salt -pbkdf2 -in "$tar_file" -out "$final_file" -pass "pass:${password}" 2>/dev/null
-        if [ $? -ne 0 ]; then
-            log_error "$(_t_or backup_encrypt_err 'Ошибка шифрования')"
-            rm -f "$tar_file"
-            rm -rf "$tmp_dir"
+        if ! command -v gpg >/dev/null 2>&1; then
+            log_error "Для защищённого бэкапа нужен пакет gnupg"
+            backup_secure_cleanup "$work_dir"
             return 1
         fi
-        rm -f "$tar_file"
-        log_success "$(_t_or backup_encrypted 'Бекап зашифрован (AES-256-CBC)')"
+        final_file="${output_dir}/${backup_name}.tar.gz.gpg"
+        if ! printf '%s' "$password" | gpg --batch --yes --quiet \
+            --pinentry-mode loopback --passphrase-fd 0 --symmetric \
+            --cipher-algo AES256 --output "$final_file" "$tar_file" 2>/dev/null; then
+            log_error "$(_t_or backup_encrypt_err 'Ошибка шифрования')"
+            rm -f -- "$final_file"
+            backup_secure_cleanup "$work_dir"
+            return 1
+        fi
+        log_success "Бэкап зашифрован GPG/AES-256"
     else
         final_file="${output_dir}/${backup_name}.tar.gz"
-        mv "$tar_file" "$final_file"
+        mv -- "$tar_file" "$final_file"
     fi
 
-    # SHA256 подпись
-    sha256sum "$final_file" > "${final_file}.sha256" 2>/dev/null
+    chmod 600 "$final_file"
+    (
+        cd "$output_dir" &&
+        sha256sum "$(basename "$final_file")" > "$(basename "$final_file").sha256"
+    ) || {
+        log_error "Не удалось создать файл контроля целостности"
+        rm -f -- "$final_file" "${final_file}.sha256"
+        backup_secure_cleanup "$work_dir"
+        return 1
+    }
+    chmod 600 "${final_file}.sha256"
 
     # Очистка
-    rm -rf "$tmp_dir"
+    backup_secure_cleanup "$work_dir"
 
     local size
     size=$(du -h "$final_file" | cut -f1)
@@ -201,33 +305,60 @@ restore_backup() {
         return 1
     fi
 
-    local tmp_dir="/tmp/gotelegram_restore_$$"
-    mkdir -p "$tmp_dir"
+    umask 077
+    if ! backup_verify_checksum "$backup_file"; then
+        log_error "Контрольная сумма не совпала. Восстановление остановлено."
+        return 1
+    fi
+
+    local tmp_dir
+    tmp_dir=$(mktemp -d /tmp/gotelegram-restore.XXXXXX) || return 1
 
     # Расшифровываем если нужно
     local tar_file=""
-    if echo "$backup_file" | grep -q '\.enc$'; then
+    if [[ "$backup_file" == *.gpg ]]; then
         if [ -z "$password" ]; then
             echo -ne "  $(_t_or backup_enter_pass 'Введите пароль от бекапа'): "
             read -rs password
             echo ""
         fi
-        tar_file="/tmp/gotelegram_restore_$$.tar.gz"
-        openssl enc -aes-256-cbc -d -pbkdf2 -in "$backup_file" -out "$tar_file" -pass "pass:${password}" 2>/dev/null
-        if [ $? -ne 0 ]; then
+        tar_file="${tmp_dir}/restore.tar.gz"
+        if ! printf '%s' "$password" | gpg --batch --yes --quiet \
+            --pinentry-mode loopback --passphrase-fd 0 --decrypt \
+            --output "$tar_file" "$backup_file" 2>/dev/null; then
             log_error "$(_t_or backup_bad_pass 'Неверный пароль или повреждённый файл')"
-            rm -rf "$tmp_dir" "$tar_file"
+            backup_secure_cleanup "$tmp_dir"
             return 1
         fi
+        password=""
+    elif [[ "$backup_file" == *.enc ]]; then
+        if [ -z "$password" ]; then
+            echo -ne "  $(_t_or backup_enter_pass 'Введите пароль от бекапа'): "
+            read -rs password
+            echo ""
+        fi
+        tar_file="${tmp_dir}/restore.tar.gz"
+        if ! printf '%s' "$password" | openssl enc -aes-256-cbc -d -pbkdf2 \
+            -in "$backup_file" -out "$tar_file" -pass stdin 2>/dev/null; then
+            log_error "$(_t_or backup_bad_pass 'Неверный пароль или повреждённый файл')"
+            backup_secure_cleanup "$tmp_dir"
+            return 1
+        fi
+        password=""
     else
         tar_file="$backup_file"
     fi
 
+    if ! backup_archive_paths_are_safe "$tar_file"; then
+        log_error "Архив содержит небезопасные пути. Восстановление остановлено."
+        backup_secure_cleanup "$tmp_dir"
+        return 1
+    fi
+
     # Распаковываем
-    tar xzf "$tar_file" -C "$tmp_dir" 2>/dev/null
-    if [ $? -ne 0 ]; then
+    if ! tar xzf "$tar_file" -C "$tmp_dir" --no-same-owner --no-same-permissions 2>/dev/null; then
         log_error "$(_t_or backup_extract_err 'Ошибка распаковки архива')"
-        rm -rf "$tmp_dir"
+        backup_secure_cleanup "$tmp_dir"
         return 1
     fi
 
@@ -264,7 +395,7 @@ restore_backup() {
     fi
 
     if [ "$assume_yes" != "yes" ] && ! confirm "$(_t_or backup_confirm_restore 'Восстановить конфигурацию? Текущие настройки будут перезаписаны.')"; then
-        rm -rf "$tmp_dir"
+        backup_secure_cleanup "$tmp_dir"
         return 0
     fi
 
@@ -396,8 +527,7 @@ restore_backup() {
     systemctl restart gotelegram-admin 2>/dev/null || true
 
     # Очистка
-    rm -rf "$tmp_dir"
-    [ "$tar_file" != "$backup_file" ] && rm -f "$tar_file"
+    backup_secure_cleanup "$tmp_dir"
 
     log_success "$(_t_or backup_restore_done 'Восстановление завершено!')"
     show_proxy_info
@@ -476,6 +606,15 @@ set_backup_schedule() {
         rm -f /etc/systemd/system/gotelegram-backup.timer /etc/systemd/system/gotelegram-backup.service
         systemctl daemon-reload >/dev/null 2>&1 || true
     else
+        if ! command -v gpg >/dev/null 2>&1; then
+            log_error "Для плановых защищённых бэкапов установите пакет gnupg"
+            return 1
+        fi
+        if [ ! -f "$BACKUP_PASSPHRASE_FILE" ]; then
+            ensure_backup_passphrase_file || return 1
+            log_info "Создан отдельный ключ плановых бэкапов: $BACKUP_PASSPHRASE_FILE"
+            log_info "Скопируйте этот ключ в безопасное место отдельно от VPS."
+        fi
         cat > /etc/systemd/system/gotelegram-backup.service << 'EOSVC'
 [Unit]
 Description=goTelegram Pro backup
@@ -485,7 +624,7 @@ After=network-online.target
 [Service]
 Type=oneshot
 Environment=GOTELEGRAM_BACKUP_KEEP=30
-ExecStart=/bin/bash -lc 'source /opt/gotelegram/lib/common.sh; source /opt/gotelegram/lib/i18n.sh; source /opt/gotelegram/lib/telemt.sh; source /opt/gotelegram/lib/website.sh; source /opt/gotelegram/lib/backup.sh; load_language "$(detect_language 2>/dev/null || echo en)"; create_backup ""; cleanup_old_backups "${GOTELEGRAM_BACKUP_KEEP:-30}"'
+ExecStart=/bin/bash -lc 'source /opt/gotelegram/current/lib/common.sh; source /opt/gotelegram/current/lib/i18n.sh; source /opt/gotelegram/current/lib/telemt.sh; source /opt/gotelegram/current/lib/website.sh; source /opt/gotelegram/current/lib/backup.sh; load_language ru; create_backup_from_password_file; cleanup_old_backups "${GOTELEGRAM_BACKUP_KEEP:-30}"'
 EOSVC
 
         cat > /etc/systemd/system/gotelegram-backup.timer << EOTIMER

@@ -1,147 +1,132 @@
 #!/bin/bash
-# GoTelegram Pro — Bootstrap installer for private repo
-# Downloads all files and launches install.sh
+# goTelegram — verified, atomic release bootstrap
 
 set -euo pipefail
+umask 077
 
-REPO="anten-ka/gotelegram_pro"
-BRANCH="${GOTELEGRAM_BRANCH:-main}"
-PAT="${GOTELEGRAM_PAT:-}"
-INSTALL_DIR="/opt/gotelegram"
-# Use raw.githubusercontent.com (CDN) — faster and avoids Contents API caching
-# issues that occasionally return 404 for recently added files on non-default branches.
-RAW="https://raw.githubusercontent.com/${REPO}/${BRANCH}"
+INSTALL_ROOT="${GOTELEGRAM_INSTALL_ROOT:-/opt/gotelegram}"
+COMMAND_PATH="${GOTELEGRAM_COMMAND_PATH:-/usr/local/bin/gotelegram}"
+RELEASE_URL="${GOTELEGRAM_RELEASE_URL:-}"
+RELEASE_SHA256="${GOTELEGRAM_RELEASE_SHA256:-}"
+TOKEN_FILE="${GOTELEGRAM_TOKEN_FILE:-}"
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 CYAN='\033[0;36m'
 YELLOW='\033[1;33m'
 NC='\033[0m'
-BOLD='\033[1m'
 
-echo ""
-echo -e "  ${YELLOW}╔══════════════════════════════════════════════════════╗${NC}"
-echo -e "  ${YELLOW}║${NC}  ${BOLD}GoTelegram Pro — Установка${NC}                          ${YELLOW}║${NC}"
-echo -e "  ${YELLOW}║${NC}                                                      ${YELLOW}║${NC}"
-echo -e "  ${YELLOW}║${NC}  MTProxy менеджер с Telegram-ботом                   ${YELLOW}║${NC}"
-echo -e "  ${YELLOW}║${NC}  Stealth-режим, 1800+ шаблонов сайтов                ${YELLOW}║${NC}"
-echo -e "  ${YELLOW}╚══════════════════════════════════════════════════════╝${NC}"
-echo ""
-
-# Check root
-if [ "$(id -u)" -ne 0 ]; then
-    echo -e "  ${RED}✗${NC} Запустите от root: ${CYAN}sudo bash bootstrap.sh${NC}"
+fail() {
+    echo -e "  ${RED}✗${NC} $*" >&2
     exit 1
-fi
-
-if [ -z "$PAT" ]; then
-    echo -e "  ${RED}✗${NC} Не задан GitHub token."
-    echo -e "  ${YELLOW}Запустите так:${NC} ${CYAN}GOTELEGRAM_PAT=YOUR_PAT sudo -E bash bootstrap.sh${NC}"
-    exit 1
-fi
-
-# Check dependencies
-for cmd in curl jq; do
-    if ! command -v "$cmd" &>/dev/null; then
-        echo -e "  ${CYAN}↻${NC} Установка $cmd..."
-        apt-get update -qq && apt-get install -y -qq "$cmd" >/dev/null 2>&1
-    fi
-done
-
-download_file() {
-    local remote_path="$1"
-    local local_path="$2"
-    local dir
-    dir=$(dirname "$local_path")
-    mkdir -p "$dir"
-
-    # Retry up to 3 times with short backoff to tolerate transient CDN hiccups
-    local attempt http_code
-    for attempt in 1 2 3; do
-        http_code=$(curl -sL -w "%{http_code}" -o "$local_path" \
-            -H "Authorization: token ${PAT}" \
-            "${RAW}/${remote_path}")
-        if [ "$http_code" = "200" ]; then
-            return 0
-        fi
-        sleep 1
-    done
-
-    echo -e "  ${RED}✗${NC} Ошибка загрузки ${remote_path} (HTTP ${http_code})"
-    return 1
 }
 
-# File list
-FILES=(
-    "install.sh"
-    "install_gotelegram_bot.sh"
-    "templates_catalog.json"
-    "lib/common.sh"
-    "lib/telemt.sh"
-    "lib/telemt_config.sh"
-    "lib/backup.sh"
-    "lib/website.sh"
-    "lib/templates_catalog.sh"
-    "lib/stats.sh"
-    "lib/diagnose.sh"
-    "lib/i18n.sh"
-    "lib/lang/en.sh"
-    "lib/lang/ru.sh"
-    "gotelegram-bot/bot.py"
-    "gotelegram-bot/i18n.py"
-    "gotelegram-bot/lang/en.json"
-    "gotelegram-bot/lang/ru.json"
-    "gotelegram-bot/config.example.env"
-    "gotelegram-bot/requirements.txt"
-    "gotelegram-bot/README.md"
-    "admin-web/server.py"
-    "admin-web/static/index.html"
-    "admin-web/static/styles.css"
-    "admin-web/static/app.js"
-)
+cleanup() {
+    local path="${WORK_DIR:-}"
+    case "$path" in
+        /tmp/gotelegram-bootstrap.*) rm -rf -- "$path" ;;
+    esac
+}
+trap cleanup EXIT HUP INT TERM
 
-echo -e "  ${CYAN}↻${NC} Загрузка файлов в ${INSTALL_DIR}..."
-mkdir -p "${INSTALL_DIR}/lib/lang" "${INSTALL_DIR}/gotelegram-bot/lang" "${INSTALL_DIR}/admin-web/static"
+[ "$(id -u)" -eq 0 ] || fail "Запустите установщик от root."
+[ -n "$RELEASE_URL" ] || fail "Не задан GOTELEGRAM_RELEASE_URL."
+[[ "$RELEASE_SHA256" =~ ^[a-fA-F0-9]{64}$ ]] || \
+    fail "GOTELEGRAM_RELEASE_SHA256 должен содержать 64 символа SHA-256."
 
-failed=0
-for f in "${FILES[@]}"; do
-    if download_file "$f" "${INSTALL_DIR}/${f}"; then
-        echo -e "  ${GREEN}✓${NC} ${f}"
-    else
-        failed=$((failed + 1))
-    fi
+for cmd in curl tar sha256sum awk; do
+    command -v "$cmd" >/dev/null 2>&1 || fail "Не найдена обязательная команда: $cmd"
 done
 
-if [ "$failed" -gt 0 ]; then
-    echo ""
-    echo -e "  ${RED}✗${NC} Не удалось загрузить ${failed} файл(ов)"
-    echo -e "  ${YELLOW}Проверьте токен доступа и подключение к сети${NC}"
-    exit 1
+WORK_DIR=$(mktemp -d /tmp/gotelegram-bootstrap.XXXXXX)
+ARCHIVE="$WORK_DIR/release.tar.gz"
+CURL_CONFIG="$WORK_DIR/curl.conf"
+
+{
+    echo 'fail'
+    echo 'location'
+    echo 'silent'
+    echo 'show-error'
+    echo 'retry = 3'
+    echo 'connect-timeout = 15'
+    echo 'max-time = 300'
+    if [ -n "$TOKEN_FILE" ]; then
+        [ -f "$TOKEN_FILE" ] || fail "Не найден файл токена: $TOKEN_FILE"
+        [ "$(stat -c '%a' "$TOKEN_FILE" 2>/dev/null)" = "600" ] || \
+            fail "Файл токена должен иметь права 600: $TOKEN_FILE"
+        IFS= read -r release_token < "$TOKEN_FILE"
+        [ -n "$release_token" ] || fail "Файл токена пуст."
+        printf 'header = "Authorization: Bearer %s"\n' "$release_token"
+        release_token=""
+    fi
+} > "$CURL_CONFIG"
+chmod 600 "$CURL_CONFIG"
+
+echo -e "  ${CYAN}↻${NC} Загрузка релиза..."
+curl --config "$CURL_CONFIG" --output "$ARCHIVE" "$RELEASE_URL"
+
+actual_sha=$(sha256sum "$ARCHIVE" | awk '{print $1}')
+[ "$actual_sha" = "${RELEASE_SHA256,,}" ] || \
+    fail "SHA-256 релиза не совпал. Ничего не установлено."
+
+if ! tar tzf "$ARCHIVE" | awk '
+    BEGIN { ok=1 }
+    /^\// { ok=0 }
+    /(^|\/)\.\.(\/|$)/ { ok=0 }
+    /\\/ { ok=0 }
+    END { exit(ok ? 0 : 1) }
+'; then
+    fail "Архив содержит небезопасные пути."
 fi
 
-# Fix permissions and line endings
-echo -e "  ${CYAN}↻${NC} Настройка прав..."
-chmod +x "${INSTALL_DIR}/install.sh" "${INSTALL_DIR}/install_gotelegram_bot.sh"
-chmod +x "${INSTALL_DIR}"/lib/*.sh
-chmod +x "${INSTALL_DIR}/admin-web/server.py" 2>/dev/null || true
-sed -i 's/\r$//' "${INSTALL_DIR}/install.sh" "${INSTALL_DIR}/install_gotelegram_bot.sh" "${INSTALL_DIR}"/lib/*.sh "${INSTALL_DIR}"/lib/lang/*.sh 2>/dev/null || true
-sed -i 's/\r$//' "${INSTALL_DIR}"/gotelegram-bot/*.py "${INSTALL_DIR}"/gotelegram-bot/lang/*.json 2>/dev/null || true
-sed -i 's/\r$//' "${INSTALL_DIR}"/admin-web/*.py "${INSTALL_DIR}"/admin-web/static/* 2>/dev/null || true
+PAYLOAD="$WORK_DIR/payload"
+mkdir -m 700 "$PAYLOAD"
+tar xzf "$ARCHIVE" -C "$PAYLOAD" --no-same-owner --no-same-permissions
 
-# Create symlink
-ln -sf "${INSTALL_DIR}/install.sh" /usr/local/bin/gotelegram
-echo -e "  ${GREEN}✓${NC} Команда ${CYAN}gotelegram${NC} доступна"
+for required in RELEASE-MANIFEST.sha256 install.sh lib/common.sh \
+    lib/installer_wizard.sh lib/backup.sh admin-web/server.py; do
+    [ -f "$PAYLOAD/$required" ] || fail "В релизе отсутствует $required"
+done
 
+if ! (
+    cd "$PAYLOAD"
+    sha256sum -c RELEASE-MANIFEST.sha256 >/dev/null
+); then
+    fail "Внутренний манифест релиза не прошёл проверку."
+fi
+
+bash -n "$PAYLOAD/install.sh"
+for script in "$PAYLOAD"/lib/*.sh; do
+    bash -n "$script"
+done
+
+release_id="${actual_sha:0:16}"
+release_dir="$INSTALL_ROOT/releases/$release_id"
+mkdir -p -m 700 "$INSTALL_ROOT/releases"
+
+if [ ! -d "$release_dir" ]; then
+    mv -- "$PAYLOAD" "$release_dir"
+fi
+chmod -R go-w "$release_dir"
+chmod +x "$release_dir/install.sh" "$release_dir/install_gotelegram_bot.sh"
+chmod +x "$release_dir"/lib/*.sh
+
+next_link="$INSTALL_ROOT/.current-${release_id}"
+ln -s "releases/$release_id" "$next_link"
+mv -Tf "$next_link" "$INSTALL_ROOT/current"
+mkdir -p "$(dirname "$COMMAND_PATH")"
+ln -sfn "$INSTALL_ROOT/current/install.sh" "$COMMAND_PATH"
+
+echo -e "  ${GREEN}✓${NC} Проверенный релиз ${release_id} активирован атомарно."
+echo -e "  ${YELLOW}i${NC} Данные и ключи в ${INSTALL_ROOT} не изменялись."
 echo ""
-echo -e "  ${GREEN}✓${NC} Установка завершена! Запуск..."
-echo ""
 
-# Launch
-# curl|bash кладёт ЭТОТ скрипт в stdin; перецепляем stdin дочернего install.sh на
-# управляющий терминал (если он есть), чтобы промпты читали ввод. Detached-запуск
-# (нет /dev/tty) сохраняет пайп — для автоматизации.
+if [ "${GOTELEGRAM_BOOTSTRAP_ACTIVATE_ONLY:-0}" = "1" ]; then
+    exit 0
+fi
+
 if [ ! -t 0 ] && { true < /dev/tty; } 2>/dev/null; then
-    exec bash "${INSTALL_DIR}/install.sh" "$@" < /dev/tty
+    exec bash "$INSTALL_ROOT/current/install.sh" "$@" < /dev/tty
 else
-    exec bash "${INSTALL_DIR}/install.sh" "$@"
+    exec bash "$INSTALL_ROOT/current/install.sh" "$@"
 fi

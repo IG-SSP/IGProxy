@@ -1468,7 +1468,7 @@ function renderBackups(backups) {
       </div>
       <div class="backup-actions">
         <span>${escapeHtml(fmtBytes(item.size))}${item.encrypted ? ` · ${escapeHtml(t("encrypted"))}` : ""}</span>
-        <button class="soft" data-restore-backup="${escapeAttr(item.name)}" ${item.encrypted ? "disabled" : ""} title="${escapeAttr(item.encrypted ? t("encryptedRestoreCli") : t("restoreBackup"))}">${escapeHtml(t("restoreBackup"))}</button>
+        <button class="soft" data-restore-backup="${escapeAttr(item.name)}" ${item.restorable === false ? "disabled" : ""} title="${escapeAttr(item.restorable === false ? t("encryptedRestoreCli") : t("restoreBackup"))}">${escapeHtml(t("restoreBackup"))}</button>
       </div>
     </div>
   `).join("");

@@ -18,8 +18,8 @@ LIB_DIR="$SCRIPT_DIR/lib"
 # Защитный fallback: если скрипт запущен как одиночный файл (например, копия в
 # /usr/local/bin без папки lib рядом — нестандартная установка), берём библиотеки
 # и ресурсы из стандартной директории установки /opt/gotelegram.
-if [ ! -f "$LIB_DIR/common.sh" ] && [ -f "/opt/gotelegram/lib/common.sh" ]; then
-    SCRIPT_DIR="/opt/gotelegram"
+if [ ! -f "$LIB_DIR/common.sh" ] && [ -f "/opt/gotelegram/current/lib/common.sh" ]; then
+    SCRIPT_DIR="/opt/gotelegram/current"
     LIB_DIR="$SCRIPT_DIR/lib"
 fi
 
@@ -31,12 +31,17 @@ source "$LIB_DIR/telemt_config.sh"
 source "$LIB_DIR/website.sh"
 source "$LIB_DIR/templates_catalog.sh"
 source "$LIB_DIR/backup.sh"
+if [ ! -f "$LIB_DIR/installer_wizard.sh" ]; then
+    log_error "Не найден модуль безопасной установки: $LIB_DIR/installer_wizard.sh"
+    exit 1
+fi
+source "$LIB_DIR/installer_wizard.sh"
 [ -f "$LIB_DIR/stats.sh" ] && source "$LIB_DIR/stats.sh"
 [ -f "$LIB_DIR/shared443.sh" ] && source "$LIB_DIR/shared443.sh"
 [ -f "$LIB_DIR/diagnose.sh" ] && source "$LIB_DIR/diagnose.sh"
 
-# Load language (from config.json or marker file, default en)
-load_language "$(detect_language)"
+# Операторский интерфейс goTelegram Clean — только русский.
+load_language "ru"
 
 # ── Главное меню (Compact Dashboard + 5 Top-Level Items) ──────────────────────
 show_main_menu() {
@@ -690,45 +695,32 @@ show_upgrade_changelog() {
 }
 
 menu_install() {
-    # Check for v1
+    if type installer_preflight_run >/dev/null 2>&1; then
+        installer_preflight_run || return
+    fi
+
+    # Дисклеймер и любые записи — только после полностью read-only preflight.
+    show_disclaimer --gate || return
+
+    # Миграция допускается только после read-only preflight.
     if detect_v1_installation; then
         echo ""
         echo -e "  ${YELLOW}$(t v1_detected)${NC}"
         echo -e "  ${DIM}$(tf v1_container "$V1_CONTAINER_NAME")${NC}"
         echo ""
-        if ! migrate_v1_to_v2; then
-            return
-        fi
+        migrate_v1_to_v2 || return
     fi
 
-    # Дисклеймер-gate (на первой установке; кэш в $GOTELEGRAM_DIR/.disclaimer-accepted)
-    show_disclaimer --gate || return
-
-    echo ""
-    echo -e "  ${BOLD}${WHITE}$(t install_select_mode)${NC}"
-    echo -e "  ${DIM}$(printf '─%.0s' {1..55})${NC}"
-    echo -e "  ${CYAN}1)${NC} ${BOLD}${GREEN}$(t install_lazy_title)${NC}"
-    echo -e "     ${DIM}$(t install_lazy_desc1)${NC}"
-    echo -e "     ${DIM}$(t install_lazy_desc2)${NC}"
-    echo ""
-    echo -e "  ${CYAN}2)${NC} ${MAGENTA}$(t install_pro_title)${NC}"
-    echo -e "     ${DIM}$(t install_pro_desc1)${NC}"
-    echo -e "     ${DIM}$(t install_pro_desc2)${NC}"
-    echo -e "     ${DIM}$(t install_pro_desc3)${NC}"
-    echo ""
-    echo -e "  ${CYAN}3)${NC} ${GREEN}$(t install_lite_title)${NC}"
-    echo -e "     ${DIM}$(t install_lite_desc1)${NC}"
-    echo -e "     ${DIM}$(t install_lite_desc2)${NC}"
-    echo -e "  ${DIM}$(printf '─%.0s' {1..55})${NC}"
-    echo -ne "  ${WHITE}$(t install_mode_choice)${NC} "
-    read -r mode_choice
-    mode_choice="${mode_choice:-}"
-
-    case "$mode_choice" in
-        ""|1) GOTELEGRAM_LAZY=1 install_pro_mode ;;
-        2) install_pro_mode ;;
-        3) install_lite_mode ;;
-        *) log_error "$(tf install_bad_choice "${mode_choice:-<empty>}")" ;;
+    local selected_mode=""
+    if type installer_choose_mode >/dev/null 2>&1; then
+        selected_mode=$(installer_choose_mode) || return
+    else
+        selected_mode="lite"
+    fi
+    case "$selected_mode" in
+        pro) install_pro_mode ;;
+        lite) install_lite_mode ;;
+        *) log_error "Неизвестный сценарий установки: $selected_mode" ;;
     esac
 }
 
@@ -762,7 +754,11 @@ install_lite_mode() {
 
     # Port selection
     local port
-    port=$(select_port)
+    if type installer_choose_public_port >/dev/null 2>&1; then
+        port=$(installer_choose_public_port)
+    else
+        port=$(select_port)
+    fi
     [ $? -ne 0 ] && return
     if [ "$port" = "443" ]; then
         warn_3xui_443_conflict || true
@@ -780,40 +776,64 @@ install_lite_mode() {
     echo -e "  $(t install_cfg_ip)         ${CYAN}${ip}${NC}"
     echo -e "  $(t install_cfg_port)       ${CYAN}${port}${NC}"
     echo -e "  $(t install_cfg_mask) ${CYAN}${domain}${NC}"
-    echo -e "  $(t install_cfg_mode)      ${GREEN}Lite${NC}"
+    echo -e "  $(t install_cfg_mode)      ${GREEN}Только прокси${NC}"
     echo ""
+    installer_show_apply_plan "lite" "$port"
 
     if ! confirm "$(t install_confirm_proxy)"; then
         return
     fi
 
+    installer_transaction_begin "proxy-only:$port" || return
+
     # Install
-    ensure_deps
+    ensure_deps || {
+        installer_transaction_rollback "не удалось установить зависимости"
+        return
+    }
     choose_telemt_version
-    install_telemt_full || return
+    install_telemt_full || {
+        installer_transaction_rollback "не удалось установить telemt"
+        return
+    }
 
     # Generate telemt config
-    generate_telemt_toml "$secret" "$port" "lite" "$domain" "443"
+    generate_telemt_toml "$secret" "$port" "lite" "$domain" "443" || {
+        installer_transaction_rollback "не удалось сформировать конфиг telemt"
+        return
+    }
 
     # Validate
-    validate_telemt_config || return
+    validate_telemt_config || {
+        installer_transaction_rollback "конфиг telemt не прошёл проверку"
+        return
+    }
 
     # Start
-    start_telemt || return
-    apply_network_sysctl
-    apply_log_hygiene
+    start_telemt || {
+        installer_transaction_rollback "telemt не запустился"
+        return
+    }
 
     # Save goTelegram Pro config
-    save_gotelegram_config "telemt" "lite" "$port" "$secret" "$domain" "" ""
+    save_gotelegram_config "telemt" "lite" "$port" "$secret" "$domain" "" "" || {
+        installer_transaction_rollback "не удалось сохранить настройки"
+        return
+    }
+    installer_verify_install "lite" "$port" || {
+        installer_transaction_rollback "финальная проверка прокси не пройдена"
+        return
+    }
+    installer_transaction_commit
 
     # Credits
     show_credits
 
     # Result
     show_proxy_info
-    log_success "$(tf install_done "$GOTELEGRAM_VERSION" "Lite")"
+    log_success "$(tf install_done "$GOTELEGRAM_VERSION" "Только прокси")"
 
-    post_install_autotune
+    log_dim "Сетевые sysctl, journald и firewall не изменялись. Оптимизацию можно запустить отдельно после проверки прокси."
 }
 
 # ── Pro mode ────────────────────────────────────────────────────────────────
@@ -822,7 +842,13 @@ install_pro_mode() {
     log_step "$(t install_pro_step)"
     [ "$lazy" = "1" ] && log_info "$(t lazy_active)"
 
-    warn_3xui_443_conflict || true
+    local public_port
+    if type installer_choose_public_port >/dev/null 2>&1; then
+        public_port=$(installer_choose_public_port) || return
+    else
+        public_port="443"
+    fi
+    [ "$public_port" = "443" ] && warn_3xui_443_conflict || true
 
     # Домен
     echo ""
@@ -834,17 +860,9 @@ install_pro_mode() {
         return
     fi
 
-    # DNS-проверка
-    local resolved_ip server_ip
-    resolved_ip=$(dig +short "$user_domain" A 2>/dev/null | head -1)
-    server_ip=$(get_server_ip)
-    if [ -n "$resolved_ip" ] && [ "$resolved_ip" != "$server_ip" ]; then
-        if [ "$lazy" = "1" ]; then
-            log_warning "$(tf lazy_dns_warn "$user_domain" "$server_ip")"
-        else
-            log_warning "$(tf install_dns_mismatch "$user_domain" "$resolved_ip" "$server_ip")"
-            if ! confirm "$(t install_continue_anyway)"; then return; fi
-        fi
+    # Строгая DNS/ACME-проверка до установки пакетов и изменения nginx.
+    if type installer_domain_preflight >/dev/null 2>&1; then
+        installer_domain_preflight "$user_domain" || return
     fi
 
     # Email для Let's Encrypt (ленивый: пропускаем — LE без почты)
@@ -871,7 +889,15 @@ install_pro_mode() {
         [ $? -ne 0 ] && return
     fi
 
-    local nginx_internal_port=8443
+    local nginx_internal_port
+    if type installer_pick_internal_port >/dev/null 2>&1; then
+        nginx_internal_port=$(installer_pick_internal_port "$public_port") || {
+            log_error "Не найден свободный внутренний порт для сайта."
+            return
+        }
+    else
+        nginx_internal_port=8443
+    fi
     echo ""
     echo -e "  ${DIM}$(t install_arch_desc1)${NC}"
     echo -e "  ${DIM}$(tf install_arch_desc2 "$nginx_internal_port")${NC}"
@@ -886,9 +912,11 @@ install_pro_mode() {
     echo ""
     echo -e "  ${BOLD}${WHITE}$(t install_config_title)${NC}"
     echo -e "  $(t install_cfg_domain)      ${CYAN}${user_domain}${NC}"
-    echo -e "  $(t install_cfg_port)       ${CYAN}443 (telemt + nginx)${NC}"
-    echo -e "  $(t install_cfg_mode)      ${MAGENTA}Pro (fake-TLS)${NC}"
+    echo -e "  $(t install_cfg_port)       ${CYAN}${public_port} (telemt)${NC}"
+    echo -e "  Внутренний сайт:      ${CYAN}127.0.0.1:${nginx_internal_port}${NC}"
+    echo -e "  $(t install_cfg_mode)      ${MAGENTA}Свой домен и сайт${NC}"
     echo ""
+    installer_show_apply_plan "pro" "$public_port" "$user_domain" "$nginx_internal_port"
 
     if [ "$lazy" = "1" ]; then
         log_info "$(t lazy_autoconfirm)"
@@ -896,11 +924,23 @@ install_pro_mode() {
         if ! confirm "$(t install_confirm_proxy_site)"; then return; fi
     fi
 
+    INSTALLER_TX_DOMAIN="$user_domain"
+    installer_transaction_begin "domain-site:$public_port" || return
+
     # Установка
-    ensure_deps
+    ensure_deps || {
+        installer_transaction_rollback "не удалось установить зависимости"
+        return
+    }
     choose_telemt_version
-    install_telemt_full || return
-    generate_telemt_toml "$raw_secret" "443" "pro" "$user_domain" "$nginx_internal_port"
+    install_telemt_full || {
+        installer_transaction_rollback "не удалось установить telemt"
+        return
+    }
+    generate_telemt_toml "$raw_secret" "$public_port" "pro" "$user_domain" "$nginx_internal_port" || {
+        installer_transaction_rollback "не удалось сформировать конфиг telemt"
+        return
+    }
 
     # Ленивый: 5 ключей (main + key2..key5). Charset имён [A-Za-z0-9_.-] — безопасно.
     if [ "$lazy" = "1" ]; then
@@ -914,21 +954,31 @@ key${i} = \"$(generate_hex 32)\""
     fi
 
     # Сайт (nginx + certbot + шаблон)
-    setup_pro_mode "$user_domain" "$template_dir" "$nginx_internal_port" "$ssl_email" || return
-    systemctl restart nginx 2>/dev/null
-    start_telemt || return
-    apply_network_sysctl
-    apply_log_hygiene
+    setup_pro_mode "$user_domain" "$template_dir" "$nginx_internal_port" "$ssl_email" || {
+        installer_transaction_rollback "не удалось настроить сайт или сертификат"
+        return
+    }
+    start_telemt || {
+        installer_transaction_rollback "telemt не запустился"
+        return
+    }
 
     local tpl_id; tpl_id=$(basename "$template_dir")
-    save_gotelegram_config "telemt" "pro" "443" "$raw_secret" "$user_domain" "$user_domain" "$tpl_id"
+    save_gotelegram_config "telemt" "pro" "$public_port" "$raw_secret" "$user_domain" "$user_domain" "$tpl_id" || {
+        installer_transaction_rollback "не удалось сохранить настройки"
+        return
+    }
+    installer_verify_install "pro" "$public_port" "$user_domain" || {
+        installer_transaction_rollback "финальная проверка прокси и сайта не пройдена"
+        return
+    }
+    installer_transaction_commit
 
-    show_proxy_info_pro "$user_domain" "$faketls_secret"
+    show_proxy_info_pro "$user_domain" "$faketls_secret" "$public_port" "$nginx_internal_port"
     echo -e "  ${WHITE}$(t svc_site):${NC} ${GREEN}https://${user_domain}${NC}"
-    log_success "$(tf install_done "$GOTELEGRAM_VERSION" "Pro")"
+    log_success "$(tf install_done "$GOTELEGRAM_VERSION" "Свой домен и сайт")"
 
-    # Авто-подбор оптимального режима (вкл. CC ядра) под сеть — во ВСЕХ режимах
-    post_install_autotune
+    log_dim "Сетевые sysctl, journald и firewall не изменялись. Оптимизацию можно запустить отдельно после проверки прокси."
 }
 
 # ── Статус ───────────────────────────────────────────────────────────────────
@@ -2049,36 +2099,16 @@ main() {
     if [ ! -t 0 ] && { true < /dev/tty; } 2>/dev/null; then exec < /dev/tty; fi
 
     check_root
-    init_dirs
-
-    # Первый запуск: если критические зависимости отсутствуют — ставим их ДО
-    # того как пользователь дойдёт до меню. На последующих запусках это просто
-    # дёшево проверяет command -v по всем командам и ничего не делает.
-    if ! check_deps_present; then
-        log_step "Первый запуск: проверяю зависимости..."
-        ensure_deps || {
-            log_error "Не удалось установить зависимости. См. сообщения выше."
-            exit 1
-        }
-    fi
-
-    auto_migrate_legacy_state || true
-    # Обновление ядра telemt — ТОЛЬКО при накатывании обновления goTelegram (сменилась
-    # версия проекта = MIGRATED_FROM выставлен), а не при каждом запуске `gotelegram`.
-    if [ -n "${MIGRATED_FROM:-}" ]; then
-        auto_update_telemt_if_possible || true
-    fi
-    auto_update_bot_if_possible || true
-    auto_install_admin_web_if_possible || true
-
-    # First-run language picker (before banner so banner appears in chosen lang)
-    first_run_language_picker
 
     show_banner
 
-    # Pre-flight
+    # До выбора действия — только read-only проверки. Обычный запуск меню больше
+    # не устанавливает пакеты, не мигрирует state и не обновляет службы сам.
     check_os
     check_disk_space 500
+    if ! check_deps_present; then
+        log_warning "Часть служебных утилит отсутствует. Мастер покажет их в плане и установит только после подтверждения."
+    fi
 
     # Ченджлог при обновлении версии (миграция выставила MIGRATED_FROM)
     if [ -n "${MIGRATED_FROM:-}" ] && type show_upgrade_changelog >/dev/null 2>&1; then
@@ -2087,7 +2117,10 @@ main() {
 
     # Первый запуск (прокси ещё не установлен) → сразу установка (дисклеймер-gate внутри)
     if ! is_telemt_installed 2>/dev/null || [ ! -f "$GOTELEGRAM_CONFIG" ]; then
-        menu_install || true
+        menu_install || {
+            log_warning "Установка отменена; система не изменена."
+            exit 1
+        }
     fi
 
     while true; do

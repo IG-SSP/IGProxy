@@ -23,6 +23,27 @@ STATS_CLEANUP_INTERVAL="${STATS_CLEANUP_INTERVAL:-3600}"
 STATS_CLEANUP_STAMP="$STATS_DIR/last_history_cleanup"
 USER_STATS_COLLECT_STAMP="$STATS_DIR/last_user_stats_minute"
 
+stats_proxy_port() {
+    local port=""
+    if [[ -f "$CONFIG_FILE" ]] && command -v jq &>/dev/null; then
+        port=$(jq -r '.port // empty' "$CONFIG_FILE" 2>/dev/null || true)
+    fi
+    if ! [[ "$port" =~ ^[0-9]+$ ]] && type get_config_value >/dev/null 2>&1; then
+        port=$(get_config_value port "$TELEMT_CONFIG_FILE" 2>/dev/null || true)
+    fi
+    [[ "$port" =~ ^[0-9]+$ ]] || port=443
+    printf '%s\n' "$port"
+}
+
+stats_site_port() {
+    local port=""
+    if type get_config_value >/dev/null 2>&1; then
+        port=$(get_config_value mask_port "$TELEMT_CONFIG_FILE" 2>/dev/null || true)
+    fi
+    [[ "$port" =~ ^[0-9]+$ ]] || port=8443
+    printf '%s\n' "$port"
+}
+
 # Initialize stats infrastructure
 stats_init() {
     if ! command -v iptables &>/dev/null; then
@@ -44,15 +65,20 @@ stats_init() {
         iptables -I INPUT -j GOTELEGRAM_STATS 2>/dev/null
     fi
 
-    # Add rule for proxy traffic (port 443, TCP)
-    if ! iptables -C GOTELEGRAM_STATS -p tcp --dport 443 2>/dev/null; then
-        iptables -A GOTELEGRAM_STATS -p tcp --dport 443 2>/dev/null
-    fi
-
-    # Add rule for site traffic (loopback, port 8443, TCP)
-    if ! iptables -C GOTELEGRAM_STATS -i lo -p tcp --dport 8443 2>/dev/null; then
-        iptables -A GOTELEGRAM_STATS -i lo -p tcp --dport 8443 2>/dev/null
-    fi
+    local proxy_port site_port
+    proxy_port=$(stats_proxy_port)
+    site_port=$(stats_site_port)
+    # Цепочка принадлежит только goTelegram: пересобираем её из фактических
+    # портов конфига, чтобы Alternate profile не учитывался как 443/8443.
+    iptables -F GOTELEGRAM_STATS 2>/dev/null || true
+    iptables -A GOTELEGRAM_STATS -p tcp --dport "$proxy_port" -m comment --comment gotelegram-proxy 2>/dev/null || {
+        log_error "Не удалось создать счётчик для публичного порта $proxy_port"
+        return 1
+    }
+    iptables -A GOTELEGRAM_STATS -i lo -p tcp --dport "$site_port" -m comment --comment gotelegram-site 2>/dev/null || {
+        log_error "Не удалось создать счётчик для внутреннего сайта $site_port"
+        return 1
+    }
 
     # Initialize CSV header if file doesn't exist
     if [[ ! -f "$HISTORY_FILE" ]]; then
@@ -83,13 +109,10 @@ stats_collect() {
     # We need to extract bytes (2nd column) for each rule
     local iptables_output=$(iptables -L GOTELEGRAM_STATS -v -n -x 2>/dev/null)
 
-    # Extract counters for port 443 (proxy)
-    proxy_bytes=$(echo "$iptables_output" | grep "dpt:443" | grep -v "lo" | awk '{print $2}')
-    proxy_pkts=$(echo "$iptables_output" | grep "dpt:443" | grep -v "lo" | awk '{print $1}')
-
-    # Extract counters for port 8443 on loopback (site)
-    site_bytes=$(echo "$iptables_output" | grep "dpt:8443" | awk '{print $2}')
-    site_pkts=$(echo "$iptables_output" | grep "dpt:8443" | awk '{print $1}')
+    proxy_bytes=$(echo "$iptables_output" | grep "gotelegram-proxy" | awk '{s+=$2} END {print s+0}')
+    proxy_pkts=$(echo "$iptables_output" | grep "gotelegram-proxy" | awk '{s+=$1} END {print s+0}')
+    site_bytes=$(echo "$iptables_output" | grep "gotelegram-site" | awk '{s+=$2} END {print s+0}')
+    site_pkts=$(echo "$iptables_output" | grep "gotelegram-site" | awk '{s+=$1} END {print s+0}')
 
     # Default to 0 if not found
     proxy_bytes=${proxy_bytes:-0}
@@ -534,7 +557,7 @@ Wants=network-online.target
 [Service]
 Type=simple
 User=root
-ExecStart=/bin/bash -c 'source /opt/gotelegram/lib/common.sh; source /opt/gotelegram/lib/stats.sh; stats_init; while true; do stats_collect; sleep 1; done'
+ExecStart=/bin/bash -c 'source /opt/gotelegram/current/lib/common.sh; source /opt/gotelegram/current/lib/stats.sh; stats_init; while true; do stats_collect; sleep 1; done'
 Restart=always
 RestartSec=5
 StandardOutput=journal

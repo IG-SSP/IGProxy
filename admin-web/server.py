@@ -53,7 +53,7 @@ VERSION = "2.7.1"  # fallback only; live value read from config.json
 USER_RE = re.compile(r"^[A-Za-z0-9_.-]{1,48}$")
 LANG_RE = re.compile(r"^(en|ru)$")
 SENSITIVE_CONFIG_KEYS = {"secret"}
-BACKUP_NAME_RE = re.compile(r"^[A-Za-z0-9_.-]+\.tar\.gz(\.enc)?$")
+BACKUP_NAME_RE = re.compile(r"^[A-Za-z0-9_.-]+\.tar\.gz(\.(enc|gpg))?$")
 MAX_UNIQUE_IP_LIMIT = 1000000
 TELEMT_RESTART_DEBOUNCE_SECONDS = float(os.getenv("GOTELEGRAM_TELEMT_RESTART_DEBOUNCE", "8"))
 _LAST_TELEMT_RESTART = 0.0
@@ -1088,9 +1088,9 @@ def stats_status(current: dict[str, Any] | None = None, history: list[dict[str, 
 def run_stats_action(action: str) -> tuple[bool, str, dict[str, Any]]:
     if action == "repair":
         body = (
-            "source /opt/gotelegram/lib/common.sh; "
-            "source /opt/gotelegram/lib/i18n.sh; "
-            "source /opt/gotelegram/lib/stats.sh; "
+            "source /opt/gotelegram/current/lib/common.sh; "
+            "source /opt/gotelegram/current/lib/i18n.sh; "
+            "source /opt/gotelegram/current/lib/stats.sh; "
             "load_language \"$(detect_language 2>/dev/null || echo en)\"; "
             "install_stats_collector; "
             "stats_collect"
@@ -1098,8 +1098,8 @@ def run_stats_action(action: str) -> tuple[bool, str, dict[str, Any]]:
         timeout = 180
     else:
         body = (
-            "source /opt/gotelegram/lib/common.sh; "
-            "source /opt/gotelegram/lib/stats.sh; "
+            "source /opt/gotelegram/current/lib/common.sh; "
+            "source /opt/gotelegram/current/lib/stats.sh; "
             "stats_init >/dev/null 2>&1 || true; "
             "stats_collect"
         )
@@ -1127,7 +1127,8 @@ def list_backups() -> list[dict[str, Any]]:
             "path": str(path),
             "size": st.st_size,
             "mtime": int(st.st_mtime),
-            "encrypted": path.name.endswith(".enc"),
+            "encrypted": path.name.endswith((".enc", ".gpg")),
+            "restorable": not path.name.endswith(".enc"),
         })
     return items[:30]
 
@@ -1170,9 +1171,9 @@ def backup_schedule_status() -> dict[str, Any]:
 def set_backup_schedule(frequency: str) -> tuple[bool, str, dict[str, Any]]:
     backup_schedule_calendar(frequency)
     script = (
-        "source /opt/gotelegram/lib/common.sh; "
-        "source /opt/gotelegram/lib/i18n.sh; "
-        "source /opt/gotelegram/lib/backup.sh; "
+        "source /opt/gotelegram/current/lib/common.sh; "
+        "source /opt/gotelegram/current/lib/i18n.sh; "
+        "source /opt/gotelegram/current/lib/backup.sh; "
         "load_language \"$(detect_language 2>/dev/null || echo en)\"; "
         f"set_backup_schedule {shlex.quote(frequency)}"
     )
@@ -1183,13 +1184,14 @@ def set_backup_schedule(frequency: str) -> tuple[bool, str, dict[str, Any]]:
 
 def create_backup() -> tuple[bool, str]:
     script = (
-        "source /opt/gotelegram/lib/common.sh; "
-        "source /opt/gotelegram/lib/i18n.sh; "
-        "source /opt/gotelegram/lib/telemt.sh; "
-        "source /opt/gotelegram/lib/website.sh; "
-        "source /opt/gotelegram/lib/backup.sh; "
-        "load_language \"$(detect_language 2>/dev/null || echo en)\"; "
-        "create_backup \"\"; "
+        "source /opt/gotelegram/current/lib/common.sh; "
+        "source /opt/gotelegram/current/lib/i18n.sh; "
+        "source /opt/gotelegram/current/lib/telemt.sh; "
+        "source /opt/gotelegram/current/lib/website.sh; "
+        "source /opt/gotelegram/current/lib/backup.sh; "
+        "load_language ru; "
+        "ensure_backup_passphrase_file; "
+        "create_backup_from_password_file; "
         "cleanup_old_backups 30"
     )
     code, stdout, stderr = run(["bash", "-lc", script], timeout=180)
@@ -1212,22 +1214,31 @@ def safe_backup_path(name: str) -> Path:
 
 def launch_restore_backup(name: str, password: str = "") -> dict[str, Any]:
     backup_path = safe_backup_path(name)
-    if backup_path.name.endswith(".enc") and not password:
-        raise ValueError("password required for encrypted backup")
+    if backup_path.name.endswith(".enc"):
+        raise ValueError("legacy encrypted backups are restored from CLI")
+    if password:
+        raise ValueError("password input is not accepted by the web panel")
     BACKUP_RESTORE_LOG.parent.mkdir(parents=True, exist_ok=True)
     quoted_path = shlex.quote(str(backup_path))
-    quoted_password = shlex.quote(password)
     quoted_log = shlex.quote(str(BACKUP_RESTORE_LOG))
+    if backup_path.name.endswith(".gpg"):
+        restore_command = (
+            f"restore_backup_from_password_file {quoted_path} "
+            "\"$BACKUP_PASSPHRASE_FILE\" yes"
+        )
+    else:
+        restore_command = f"restore_backup {quoted_path} '' yes"
     script = (
         "sleep 1; "
-        "source /opt/gotelegram/lib/common.sh; "
-        "source /opt/gotelegram/lib/i18n.sh; "
-        "source /opt/gotelegram/lib/telemt.sh; "
-        "source /opt/gotelegram/lib/website.sh; "
-        "source /opt/gotelegram/lib/backup.sh; "
-        "load_language \"$(detect_language 2>/dev/null || echo en)\"; "
-        "create_backup \"\" >/dev/null 2>&1 || true; "
-        f"restore_backup {quoted_path} {quoted_password} yes; "
+        "source /opt/gotelegram/current/lib/common.sh; "
+        "source /opt/gotelegram/current/lib/i18n.sh; "
+        "source /opt/gotelegram/current/lib/telemt.sh; "
+        "source /opt/gotelegram/current/lib/website.sh; "
+        "source /opt/gotelegram/current/lib/backup.sh; "
+        "load_language ru; "
+        "ensure_backup_passphrase_file; "
+        "create_backup_from_password_file >/dev/null 2>&1 || true; "
+        f"{restore_command}; "
         "cleanup_old_backups 30"
     )
     with BACKUP_RESTORE_LOG.open("ab") as log:

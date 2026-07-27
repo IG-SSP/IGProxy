@@ -780,8 +780,8 @@ async def get_traffic_stats() -> str:
     await sh(
         "bash",
         "-lc",
-        "source /opt/gotelegram/lib/common.sh; "
-        "source /opt/gotelegram/lib/stats.sh; "
+        "source /opt/gotelegram/current/lib/common.sh; "
+        "source /opt/gotelegram/current/lib/stats.sh; "
         "stats_init >/dev/null 2>&1 || true; stats_collect >/dev/null 2>&1 || true",
         timeout=15,
     )
@@ -2325,11 +2325,11 @@ def backup_schedule_state() -> Dict[str, Any]:
 
 async def run_full_backup() -> Tuple[bool, str]:
     script = (
-        "source /opt/gotelegram/lib/common.sh; "
-        "source /opt/gotelegram/lib/i18n.sh; "
-        "source /opt/gotelegram/lib/telemt.sh; "
-        "source /opt/gotelegram/lib/website.sh; "
-        "source /opt/gotelegram/lib/backup.sh; "
+        "source /opt/gotelegram/current/lib/common.sh; "
+        "source /opt/gotelegram/current/lib/i18n.sh; "
+        "source /opt/gotelegram/current/lib/telemt.sh; "
+        "source /opt/gotelegram/current/lib/website.sh; "
+        "source /opt/gotelegram/current/lib/backup.sh; "
         "load_language \"$(detect_language 2>/dev/null || echo en)\"; "
         "create_backup \"\"; "
         "cleanup_old_backups 30"
@@ -2343,9 +2343,9 @@ async def set_full_backup_schedule(frequency: str) -> Tuple[bool, str]:
     if frequency not in {"off", "daily", "weekly", "monthly"}:
         return False, "unsupported schedule"
     script = (
-        "source /opt/gotelegram/lib/common.sh; "
-        "source /opt/gotelegram/lib/i18n.sh; "
-        "source /opt/gotelegram/lib/backup.sh; "
+        "source /opt/gotelegram/current/lib/common.sh; "
+        "source /opt/gotelegram/current/lib/i18n.sh; "
+        "source /opt/gotelegram/current/lib/backup.sh; "
         "load_language \"$(detect_language 2>/dev/null || echo en)\"; "
         f"set_backup_schedule {shlex.quote(frequency)}"
     )
@@ -2358,11 +2358,11 @@ async def launch_full_restore(backup_path: str) -> None:
     quoted_path = shlex.quote(backup_path)
     script = (
         "sleep 1; "
-        "source /opt/gotelegram/lib/common.sh; "
-        "source /opt/gotelegram/lib/i18n.sh; "
-        "source /opt/gotelegram/lib/telemt.sh; "
-        "source /opt/gotelegram/lib/website.sh; "
-        "source /opt/gotelegram/lib/backup.sh; "
+        "source /opt/gotelegram/current/lib/common.sh; "
+        "source /opt/gotelegram/current/lib/i18n.sh; "
+        "source /opt/gotelegram/current/lib/telemt.sh; "
+        "source /opt/gotelegram/current/lib/website.sh; "
+        "source /opt/gotelegram/current/lib/backup.sh; "
         "load_language \"$(detect_language 2>/dev/null || echo en)\"; "
         "create_backup \"\" >/dev/null 2>&1 || true; "
         f"restore_backup {quoted_path} \"\" yes; "

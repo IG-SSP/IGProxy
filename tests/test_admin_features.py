@@ -80,11 +80,14 @@ class AdminFeatureTests(unittest.TestCase):
             good.write_text("backup", encoding="utf-8")
             encrypted = server.BACKUP_DIR / "gotelegram_backup_20260425_120001.tar.gz.enc"
             encrypted.write_text("backup", encoding="utf-8")
+            protected = server.BACKUP_DIR / "gotelegram_backup_20260425_120002.tar.gz.gpg"
+            protected.write_text("backup", encoding="utf-8")
             legacy = server.BACKUP_DIR / "backup_20260425_120002.tar.gz"
             legacy.write_text("backup", encoding="utf-8")
 
             self.assertEqual(server.safe_backup_path(good.name), good.resolve())
             self.assertEqual(server.safe_backup_path(encrypted.name), encrypted.resolve())
+            self.assertEqual(server.safe_backup_path(protected.name), protected.resolve())
             self.assertEqual(server.safe_backup_path(legacy.name), legacy.resolve())
 
             with self.assertRaises(ValueError):

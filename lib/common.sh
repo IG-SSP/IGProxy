@@ -315,7 +315,8 @@ apt_update() {
 # КРИТИЧЕСКИЕ (без них скрипт просто не работает):
 #   jq       — парсинг config.json, templates_catalog.json
 #   curl     — скачивание telemt и проверки HTTPS
-#   openssl  — генерация секретов, шифрование бекапов, SSL проверка
+#   openssl  — генерация секретов и SSL проверка
+#   gpg      — аутентифицированное шифрование бэкапов
 #   git      — клонирование шаблонов через download_template
 #   xxd      — hex-encode домена для fake-TLS секрета (ee-prefix)
 #   tar      — распаковка telemt архива и бекапы
@@ -339,6 +340,7 @@ apt_pkg_for_cmd() {
         netstat)   echo "net-tools" ;;
         flock)     echo "util-linux" ;;
         iptables)  echo "iptables" ;;
+        gpg)        echo "gpg" ;;
         *)         echo "$1" ;;            # команда == имя пакета
     esac
 }
@@ -351,6 +353,7 @@ dnf_pkg_for_cmd() {
         netstat)           echo "net-tools" ;;
         flock)             echo "util-linux" ;;
         iptables)          echo "iptables" ;;
+        gpg)               echo "gnupg2" ;;
         *)                 echo "$1" ;;
     esac
 }
@@ -360,7 +363,7 @@ ensure_deps() {
     # flock используется bot_action_dispatch для сериализации параллельных
     # вызовов (иначе гонка на config.json при одновременных change-template /
     # change-lite-domain из бота).
-    local critical=(curl jq openssl git xxd tar dig flock)
+    local critical=(curl jq openssl gpg git xxd tar dig flock)
     # Желательные — есть fallback, устанавливать всё равно, но не падать если не смогли
     local optional=(qrencode bc iptables)
 
@@ -452,7 +455,7 @@ ensure_deps() {
 # main() чтобы не дёргать apt-get update при каждом запуске меню.
 check_deps_present() {
     local cmd
-    for cmd in curl jq openssl git xxd tar dig flock; do
+    for cmd in curl jq openssl gpg git xxd tar dig flock; do
         command -v "$cmd" &>/dev/null || return 1
     done
     return 0
@@ -505,7 +508,7 @@ the website to nginx through dns_overrides.
 
 goTelegram Pro can generate the dispatcher with:
 
-    source /opt/gotelegram/lib/shared443.sh
+    source /opt/gotelegram/current/lib/shared443.sh
     shared443_enable <gotelegram-domain> <xray-sni-domain> 127.0.0.1:9443
 
 Move the 3x-ui/Xray inbound from 0.0.0.0:443 to 127.0.0.1:9443 in the panel first,

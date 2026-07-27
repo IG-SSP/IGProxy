@@ -115,8 +115,7 @@ EONGINX
     sed -i "s|DOMAIN_PLACEHOLDER|${escaped_domain}|g" "$NGINX_SITE_CONF"
     sed -i "s|SSL_PORT_PLACEHOLDER|${proxy_port}|g" "$NGINX_SITE_CONF"
 
-    # Активируем сайт
-    rm -f /etc/nginx/sites-enabled/default 2>/dev/null
+    # Активируем отдельный virtual host, не трогая уже существующие сайты.
     ln -sf "$NGINX_SITE_CONF" "$NGINX_SITE_LINK"
 
     log_success "nginx конфиг создан для $domain"
@@ -147,7 +146,6 @@ server {
 }
 EONGINX_TEMP
 
-    rm -f /etc/nginx/sites-enabled/default 2>/dev/null
     ln -sf "$NGINX_SITE_CONF" "$NGINX_SITE_LINK"
     mkdir -p /var/www/certbot
 }
@@ -161,8 +159,15 @@ obtain_ssl_certificate() {
         log_info "Получение SSL сертификата для $domain..."
 
         # Временный конфиг для ACME challenge
-        generate_nginx_temp_config "$domain"
-        systemctl restart nginx 2>/dev/null
+        generate_nginx_temp_config "$domain" || return 1
+        if ! nginx -t 2>/dev/null; then
+            log_error "Временный nginx-конфиг не прошёл проверку; действующий nginx не перезапущен."
+            return 1
+        fi
+        systemctl restart nginx 2>/dev/null || {
+            log_error "Не удалось применить временный nginx-конфиг."
+            return 1
+        }
 
         local certbot_args=(
             certonly
@@ -204,11 +209,31 @@ setup_ssl_auto_renewal() {
         return 0
     fi
 
-    # Fallback: cron
-    if ! crontab -l 2>/dev/null | grep -q "certbot renew"; then
-        (crontab -l 2>/dev/null; echo "0 3 * * * certbot renew --quiet --post-hook 'systemctl reload nginx'") | crontab -
-        log_success "Авто-обновление SSL через cron (3:00 ежедневно)"
-    fi
+    # Изолированный fallback вместо изменения общего root crontab.
+    cat > /etc/systemd/system/gotelegram-certbot-renew.service << 'EOSVC'
+[Unit]
+Description=goTelegram certificate renewal
+After=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/certbot renew --quiet --post-hook "systemctl reload nginx"
+EOSVC
+    cat > /etc/systemd/system/gotelegram-certbot-renew.timer << 'EOTIMER'
+[Unit]
+Description=goTelegram certificate renewal timer
+
+[Timer]
+OnCalendar=*-*-* 03:00:00
+Persistent=true
+RandomizedDelaySec=30m
+
+[Install]
+WantedBy=timers.target
+EOTIMER
+    systemctl daemon-reload >/dev/null 2>&1 || return 1
+    systemctl enable --now gotelegram-certbot-renew.timer >/dev/null 2>&1 || return 1
+    log_success "Автообновление SSL через отдельный systemd timer"
 }
 
 # ── Обновление сертификата вручную ───────────────────────────────────────────

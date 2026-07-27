@@ -117,7 +117,7 @@ class BotFeatureTests(unittest.TestCase):
         self.assertIn("await get_telemt_version()", body)
         self.assertNotIn('sh("telemt", "--version")', body)
 
-    def test_installer_auto_updates_existing_bot_files(self):
+    def test_bot_update_helper_exists_but_menu_start_does_not_mutate_services(self):
         source = INSTALL_PATH.read_text(encoding="utf-8")
         auto_body = re.search(
             r"auto_update_bot_if_possible\(\).*?(?=\n\n[A-Za-z0-9_]+\(\) |\n\n#)",
@@ -132,11 +132,11 @@ class BotFeatureTests(unittest.TestCase):
         self.assertIn('cmp -s "$SCRIPT_DIR/gotelegram-bot/bot.py" "$BOT_DIR/bot.py"', auto_text)
         self.assertIn('cmp -s "$SCRIPT_DIR/gotelegram-bot/i18n.py" "$BOT_DIR/i18n.py"', auto_text)
         self.assertIn('cmp -s "$SCRIPT_DIR/gotelegram-bot/requirements.txt" "$BOT_DIR/requirements.txt"', auto_text)
-        migrate_at = source.index("auto_migrate_legacy_state || true")
-        bot_update_at = source.index("auto_update_bot_if_possible || true", migrate_at)
-        admin_install_at = source.index("auto_install_admin_web_if_possible || true", bot_update_at)
-        self.assertLess(migrate_at, bot_update_at)
-        self.assertLess(bot_update_at, admin_install_at)
+
+        main_text = source[source.index("\nmain() {"):source.index('\nmain "$@"')]
+        self.assertNotIn("auto_migrate_legacy_state || true", main_text)
+        self.assertNotIn("auto_update_bot_if_possible || true", main_text)
+        self.assertNotIn("auto_install_admin_web_if_possible || true", main_text)
 
 
 if __name__ == "__main__":

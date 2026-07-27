@@ -8,28 +8,37 @@
 
 - ядро `telemt` с fake-TLS маскировкой;
 - CLI-меню `gotelegram`;
-- Lite-режим без домена и Pro-режим с доменом/сайтом/Let's Encrypt;
+- режим «только прокси» без домена и режим «свой домен и сайт» с Let's Encrypt;
 - Telegram-бот для статуса, ссылок, QR, бэкапов, шаблонов, ключей и статистики;
 - локальная web-админка на `127.0.0.1:1984`;
 - глобальная и per-key история трафика;
 - ручные и scheduled бэкапы;
-- shared-443 схема для совместной работы с 3x-ui/Xray.
+- безопасный выбор свободного публичного порта без перемещения чужих служб.
 
 ## Установка
 
-Запускать под `root` на Ubuntu/Debian:
+Сначала скачайте `bootstrap.sh` и релизный архив из одной опубликованной версии.
+Сверьте SHA-256 bootstrap по карточке релиза, затем запускайте под `root`:
 
 ```bash
-export GOTELEGRAM_PAT="YOUR_READ_ONLY_GITHUB_TOKEN"; bash <(curl -sL -H "Authorization: token $GOTELEGRAM_PAT" https://raw.githubusercontent.com/anten-ka/gotelegram_pro/main/bootstrap.sh)
+GOTELEGRAM_RELEASE_URL="https://example.org/gotelegram-release.tar.gz" \
+GOTELEGRAM_RELEASE_SHA256="<64 символа SHA-256 архива>" \
+bash bootstrap.sh
 ```
 
-`bootstrap.sh` скачает файлы в `/opt/gotelegram`, создаст `/usr/local/bin/gotelegram` и откроет главное меню.
+`bootstrap.sh` проверит архив и внутренний манифест, атомарно переключит
+`/opt/gotelegram/current`, создаст `/usr/local/bin/gotelegram` и откроет русское меню.
+Для приватного хранилища токен передаётся только через root-only файл
+`GOTELEGRAM_TOKEN_FILE`, а не через командную строку.
 
-## Режимы
+## Варианты установки
 
-**Lite** работает сразу без домена. Клиент подключается к `IP:443`, а прокси имитирует TLS под популярный домен вроде `google.com`.
+**Только прокси** работает без собственного домена. Мастер предлагает `443`, а
+если он занят — безопасный альтернативный порт. Чужие службы не перемещаются.
 
-**Pro** требует домен, который указывает на VPS. Telegram-клиенты и обычные браузеры используют один публичный домен на `443`: Telegram-трафик идёт в `telemt`, браузер открывает сайт-маскировку через nginx.
+**Свой домен и сайт** требует корректные A/AAAA/CAA-записи. Telegram-клиенты и
+обычные браузеры используют выбранный публичный порт: Telegram-трафик идёт в
+`telemt`, браузер открывает сайт-маскировку через локальный nginx.
 
 ## Web-Админка
 
@@ -51,15 +60,8 @@ ssh -L 1984:127.0.0.1:1984 root@SERVER_IP
 http://127.0.0.1:1984/
 ```
 
-Внутри есть dashboard, сервисы, проверка сайта, кто слушает `443`, графики трафика, ключи пользователей, QR, IP-лимиты, бэкапы, логи, переключение языка и светлая/тёмная тема.
-
-## Ветки
-
-- `main` — продакшен и ветка установки по умолчанию.
-- `beta` — публичная бета для следующих сборок и пользовательского тестирования.
-- `alpha` — ранние личные сборки владельца.
-
-Новые изменения сначала идут в `alpha`, потом после проверки в `beta`, и только затем в `main`.
+Внутри есть сводка, сервисы, проверка сайта и портов, плавные графики трафика,
+карточки ключей, QR, IP-лимиты, защищённые бэкапы и понятный режим логов.
 
 ## Документация
 
@@ -72,8 +74,9 @@ http://127.0.0.1:1984/
 Перед пушем:
 
 ```bash
-bash -n bootstrap.sh install.sh lib/*.sh
-python3 -m unittest tests.test_admin_features tests.test_bot_features
+bash -n bootstrap.sh install.sh install_gotelegram_bot.sh lib/*.sh
+python3 -m unittest discover -s tests -v
+python3 tools/build_release.py
 PYTHONPYCACHEPREFIX=/tmp/gotelegram-pycache python3 -m py_compile gotelegram-bot/bot.py admin-web/server.py
 node --check admin-web/static/app.js
 git diff --check

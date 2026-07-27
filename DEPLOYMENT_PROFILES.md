@@ -1,40 +1,67 @@
-# Deployment profiles
+# Профили развёртывания goTelegram Clean
 
-goTelegram Clean must not assume that TCP 443 is available on every host.
-The configured public port is the source of truth for Telemt, Telegram links,
-QR codes, the bot, and the admin dashboard.
+Установщик не считает TCP/443 свободным по умолчанию. Выбранный публичный порт
+является единым источником правды для telemt, Telegram-ссылок, QR-кодов, бота,
+статистики и админки.
 
-## Direct 443
+## Прямой 443
 
-Use when TCP 443 is free. Telemt binds the public port directly. This is the
-preferred censorship-resistance profile because the traffic resembles ordinary
-HTTPS on the standard port.
+Используется, когда TCP/443 свободен или уже принадлежит этой же установке
+telemt. Это предпочтительный профиль: соединение выглядит как обычный HTTPS на
+стандартном порту.
 
-## Alternate port
+## Альтернативный порт
 
-Use when TCP 443 already belongs to nginx, Xray, 3x-ui, or another production
-service. Keep that service unchanged and bind Telemt to the first available
-configured candidate, normally `8443`, `9443`, or `2053`.
+Безопасный профиль для серверов, где TCP/443 уже занят nginx, Xray, 3x-ui,
+Caddy или другим рабочим сервисом. Существующий владелец не останавливается и
+не перенастраивается. Мастер проверяет кандидаты в порядке:
 
-This is the safe default for unattended or fleet deployments. The selected
-port must be written to `config.json`, Telemt `server.port` and
-`general.links.public_port`.
+1. `8443`;
+2. `9443`;
+3. `2053`;
+4. указанный оператором порт.
 
-## Shared 443
+Занятый пользовательский порт всегда отклоняется. Подтверждения «продолжить
+всё равно» нет.
 
-Use only as an explicit advanced profile. A single L4 dispatcher owns public
-TCP 443 and forwards connections to loopback listeners. Deployment requires a
-backup, protocol/SNI compatibility checks, and a verified rollback for every
-service already using 443.
+## Совместный 443
 
-The installer must never enable this profile or relocate an existing service
-without an operator confirmation.
+Экспериментальный профиль для одного L4/SNI-диспетчера и нескольких внутренних
+backend-сервисов. Он не включается автоматически и пока не входит в безопасный
+мастер. Для него требуется отдельная карта всех SNI, проверенный nginx
+candidate config и единый rollback для nginx, telemt и Xray/3x-ui.
 
-## Port selection policy
+## Контракт интерактивного мастера
 
-1. Detect the current owner of TCP 443.
-2. If it is free, recommend Direct 443.
-3. If another process owns it, recommend Alternate port.
-4. Test candidates in order: `8443`, `9443`, `2053`.
-5. Refuse an occupied custom port.
-6. Expose Shared 443 as a separate advanced action.
+До подтверждения мастер выполняет только операции чтения и показывает:
+
+- ОС, архитектуру, память, диск и inode;
+- публичный IPv4;
+- владельцев TCP/80, TCP/443 и резервных портов;
+- конфликты локальных `127.0.0.1:1984`, `:9090` и `:9091`;
+- состояние firewall без автоматического изменения правил;
+- существующую установку и рекомендуемый публичный порт;
+- точный план файлов, служб и портов, которые будут изменены.
+
+Для сценария «Свой домен и сайт» дополнительно обязательны:
+
+- совпадение A-записи с IPv4 сервера;
+- согласованность публичных резолверов `1.1.1.1` и `8.8.8.8`;
+- корректная AAAA-запись либо её отсутствие;
+- CAA, разрешающая Let’s Encrypt;
+- свободный TCP/80 либо существующий nginx;
+- отдельный свободный loopback-порт сайта.
+
+После подтверждения создаётся root-only транзакционный снимок, берётся
+глобальный installer lock, затем применяются изменения. При ошибке конфигурации,
+запуска службы или финального health-check восстанавливаются предыдущие файлы и
+состояния служб. Обычный запуск команды `gotelegram` не устанавливает пакеты и
+не обновляет службы автоматически.
+
+## Что мастер намеренно не меняет
+
+- существующего владельца TCP/443;
+- firewall и облачные security groups;
+- глобальные sysctl;
+- глобальные лимиты и историю journald/rsyslog;
+- публичную привязку админки: она остаётся только на `127.0.0.1:1984`.

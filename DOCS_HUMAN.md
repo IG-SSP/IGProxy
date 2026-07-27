@@ -31,23 +31,34 @@ goTelegram Pro — это готовый менеджер прокси-серв�
 
 ## 2. Быстрый старт
 
-На чистом Ubuntu/Debian VPS под root:
+Установка выполняется только из цельного релизного архива с опубликованной
+контрольной суммой. Скачайте `bootstrap.sh` и сверьте его SHA-256 по карточке
+релиза, затем на чистом Ubuntu/Debian VPS под root:
 
 ```bash
-export GOTELEGRAM_PAT="YOUR_PAT"; bash <(curl -sL -H "Authorization: token $GOTELEGRAM_PAT" "https://raw.githubusercontent.com/anten-ka/gotelegram_pro/main/bootstrap.sh")
+GOTELEGRAM_RELEASE_URL="https://example.org/gotelegram-release.tar.gz" \
+GOTELEGRAM_RELEASE_SHA256="<64 символа SHA-256 архива>" \
+bash bootstrap.sh
 ```
 
-Если нужно поставить строго зафиксированный релиз или тег, укажи ветку/тег явно:
+Для приватного хранилища положите read-only токен в отдельный файл:
 
 ```bash
-export GOTELEGRAM_PAT="YOUR_PAT" GOTELEGRAM_BRANCH="v2.5.0"; bash <(curl -sL -H "Authorization: token $GOTELEGRAM_PAT" "https://raw.githubusercontent.com/anten-ka/gotelegram_pro/v2.5.0/bootstrap.sh")
+install -m 600 /dev/null /root/.gotelegram-release-token
+nano /root/.gotelegram-release-token
+GOTELEGRAM_TOKEN_FILE=/root/.gotelegram-release-token \
+GOTELEGRAM_RELEASE_URL="<URL архива>" \
+GOTELEGRAM_RELEASE_SHA256="<SHA-256 архива>" \
+bash bootstrap.sh
 ```
 
-`bootstrap.sh` скачает все файлы из приватного репозитория, создаст симлинк `/usr/local/bin/gotelegram` и запустит главное меню. Через минуту команда `gotelegram` уже будет работать откуда угодно.
+`bootstrap.sh` сначала проверит SHA-256 и внутренний манифест, затем атомарно
+переключит `/opt/gotelegram/current`. Незавершённая загрузка не смешивается с
+рабочей версией. После этого команда `gotelegram` доступна откуда угодно.
 
 Дальше в меню:
 
-- **1) Прокси → 1) Установить / обновить** — ставит прокси, спрашивает режим Lite/Pro, домен и шаблон.
+- **1) Прокси → 1) Установить / обновить** — запускает русскую проверку сервера и предлагает «свой домен и сайт» либо «только прокси».
 - **1) Прокси → 2) Подробный статус** — показывает, жив ли telemt, IP, порт, режим и домен.
 - **1) Прокси → 3) Ссылка** — показывает `tg://proxy?...` и QR-код.
 
@@ -55,9 +66,12 @@ export GOTELEGRAM_PAT="YOUR_PAT" GOTELEGRAM_BRANCH="v2.5.0"; bash <(curl -sL -H 
 
 ---
 
-## 3. Lite vs Pro — что выбрать
+## 3. Какой вариант выбрать
 
-### Lite (быстрый, без домена)
+Старые названия `Lite` и `Pro` убраны из основного мастера, потому что не
+объясняли, что именно изменится на сервере.
+
+### Только прокси
 
 - Работает сразу без какого-либо домена.
 - Ссылка выглядит как IP-адрес: `tg://proxy?server=203.0.113.10&port=443&secret=ee...`
@@ -65,7 +79,7 @@ export GOTELEGRAM_PAT="YOUR_PAT" GOTELEGRAM_BRANCH="v2.5.0"; bash <(curl -sL -H 
 - Минус: IP-адрес виден, и если провайдер блокирует по списку known-bad-IP, ключ перестанет работать.
 - Подходит, если домена пока нет, а пользоваться нужно уже сейчас.
 
-### Pro (стелс, со своим доменом)
+### Свой домен и сайт
 
 - Нужен настоящий домен, который указывает A-записью на IP VPS.
 - Провайдеру видно: HTTPS-трафик к `твой-домен.com:443` — выглядит как обычный сайт.
@@ -200,7 +214,7 @@ CLI и бот переведены на русский и английский. 
 После переноса Xray-входа можно включить маршрут:
 
 ```bash
-source /opt/gotelegram/lib/shared443.sh
+source /opt/gotelegram/current/lib/shared443.sh
 shared443_enable my-domain.com xray-domain.com 127.0.0.1:9443
 ```
 
