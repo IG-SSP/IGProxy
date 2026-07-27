@@ -52,7 +52,7 @@ SITE_PRESETS_DIR = Path(os.getenv("GOTELEGRAM_SITE_PRESETS", "/opt/gotelegram/cu
 
 HOST = os.getenv("GOTELEGRAM_ADMIN_HOST", "127.0.0.1")
 PORT = int(os.getenv("GOTELEGRAM_ADMIN_PORT", "1984"))
-VERSION = "2.8.0"  # fallback only; live value read from config.json
+VERSION = "2.8.1"  # fallback only; live value read from config.json
 RUNTIME_COMMON_PATHS = (
     INSTALL_DIR / "current" / "lib" / "common.sh",
     Path(__file__).resolve().parents[1] / "lib" / "common.sh",
@@ -211,6 +211,10 @@ def public_config(config: dict[str, Any]) -> dict[str, Any]:
 
 
 SITE_PRESETS = {
+    "route-workshop": {
+        "name": "Маршрутная мастерская",
+        "description": "Playful 3D-заглушка с улитками, картой и светящимися маршрутами.",
+    },
     "glass-garden": {
         "name": "Сад за стеклом",
         "description": "Светлая басня о хранителях дверей и бумажных птицах.",

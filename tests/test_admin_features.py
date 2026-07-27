@@ -324,6 +324,7 @@ class AdminFeatureTests(unittest.TestCase):
         self.assertIn('id="siteSettingsForm"', html)
         self.assertIn("/api/site/settings", server)
         self.assertIn("apply_site_preset", server)
+        self.assertIn('"route-workshop"', server)
         self.assertIn(".site-preset-card", styles)
 
     def test_site_preset_is_rendered_for_selected_key_and_is_world_readable(self):
