@@ -81,6 +81,17 @@ class BotFeatureTests(unittest.TestCase):
         self.assertIn("ssh -N -L 127.0.0.1:", source)
         self.assertIn("termius-port-forwarding.png", source)
         self.assertIn("reply_photo", source)
+        self.assertIn("обязательно нажмите на него", source)
+        self.assertIn('InlineKeyboardButton("Открыть веб-админку"', source)
+
+    def test_bot_has_persistent_launcher_and_tme_links(self):
+        source = BOT_PATH.read_text(encoding="utf-8")
+        self.assertIn("get_closed_menu_keyboard", source)
+        self.assertIn('"Открыть Управление"', source)
+        self.assertIn("ReplyKeyboardRemove", source)
+        self.assertIn("<b>IGProxy · Управление прокси</b>", source)
+        self.assertIn("https://t.me/proxy?server=", source)
+        self.assertNotIn('return f"tg://proxy?server=', source)
 
     def test_stats_view_does_not_reinitialize_firewall_counters(self):
         source = BOT_PATH.read_text(encoding="utf-8")

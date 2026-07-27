@@ -32,7 +32,8 @@ from telegram import (
     Update,
     InlineKeyboardButton,
     InlineKeyboardMarkup,
-    InputFile,
+    ReplyKeyboardMarkup,
+    ReplyKeyboardRemove,
 )
 from telegram.ext import (
     Application,
@@ -107,7 +108,7 @@ def _read_gotelegram_version() -> str:
                 return str(_v)
     except Exception:
         pass
-    return "2.8.1"
+    return "2.9.0"
 
 
 GOTELEGRAM_VERSION = _read_gotelegram_version()
@@ -591,6 +592,30 @@ def get_main_menu(user_id: Optional[int] = None) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(buttons)
 
 
+def get_closed_menu_keyboard() -> ReplyKeyboardMarkup:
+    """A persistent launcher shown only while the inline management menu is closed."""
+    return ReplyKeyboardMarkup(
+        [["Открыть Управление"]],
+        resize_keyboard=True,
+        one_time_keyboard=False,
+        input_field_placeholder="Открыть меню IGProxy",
+    )
+
+
+async def hide_closed_menu_keyboard(update: Update) -> None:
+    """Remove the persistent launcher before showing the inline management menu."""
+    if update.message is None:
+        return
+    marker = await update.message.reply_text(
+        "Открываю Управление…",
+        reply_markup=ReplyKeyboardRemove(),
+    )
+    try:
+        await marker.delete()
+    except TelegramError:
+        pass
+
+
 # ============================================================================
 # COMMANDS
 # ============================================================================
@@ -627,8 +652,9 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         )
         return
 
+    await hide_closed_menu_keyboard(update)
     welcome = (
-        f"<b>IGProxy · управление прокси</b>\n\n"
+        f"<b>IGProxy · Управление прокси</b>\n\n"
         "Этот бот управляет MTProxy: ключами, нагрузкой, трафиком, "
         "службами, бекапами и локальной веб‑админкой.\n\n"
         "Основано на ядре <b>telemt</b>.\n"
@@ -837,25 +863,43 @@ async def get_traffic_stats() -> str:
         return f"{bps/1048576:.1f} MB/s"
 
     def calc_for_period(secs, key):
+        """Sum positive counter deltas, including bytes after a counter reset."""
         target_ts = now - secs
-        # Find closest snapshot to target_ts
-        closest = None
-        for h in history:
-            if h["ts"] <= target_ts:
-                if closest is None or h["ts"] > closest["ts"]:
-                    closest = h
-        if closest is None:
+        samples = [
+            {"ts": int(item["ts"]), key: int(item.get(key, 0))}
+            for item in history
+            if int(item.get("ts", 0)) > 0
+        ]
+        samples.append({
+            "ts": int(current.get("epoch") or current.get("timestamp") or now),
+            key: int(current.get(f"{key}_bytes", 0) or 0),
+        })
+        deduped = {}
+        for item in samples:
+            deduped[item["ts"]] = item
+        ordered = [deduped[stamp] for stamp in sorted(deduped)]
+        if len(ordered) < 2:
             return "—", "—"
 
-        current_val = current.get(f"{key}_bytes", 0)
-        diff = current_val - closest[key]
-        if diff < 0:
-            diff = 0
-        elapsed = now - closest["ts"]
-        if elapsed <= 0:
-            elapsed = 1
-        rate = diff / elapsed
-        return format_bytes(diff), format_rate(rate)
+        first_index = 0
+        for index, item in enumerate(ordered):
+            if item["ts"] <= target_ts:
+                first_index = index
+            elif index:
+                break
+        window = ordered[first_index:]
+        if len(window) < 2:
+            return "—", "—"
+
+        total = 0
+        for previous, item in zip(window, window[1:]):
+            if item["ts"] <= target_ts:
+                continue
+            before = int(previous.get(key, 0))
+            after = int(item.get(key, 0))
+            total += after - before if after >= before else after
+        elapsed = max(1, window[-1]["ts"] - max(target_ts, window[0]["ts"]))
+        return format_bytes(total), format_rate(total / elapsed)
 
     periods = [
         ("1 мин", 60),
@@ -1734,7 +1778,12 @@ def user_traffic_history_summary(name: str) -> str:
                     }
                 except ValueError:
                     continue
-                item["total_delta"] = max(0, item["total_octets"] - previous["total_octets"]) if previous else 0
+                if previous:
+                    before = previous["total_octets"]
+                    after = item["total_octets"]
+                    item["total_delta"] = after - before if after >= before else after
+                else:
+                    item["total_delta"] = 0
                 rows.append(item)
                 previous = item
     except Exception:
@@ -1766,15 +1815,15 @@ async def get_proxy_link_for_secret(secret: str) -> Optional[str]:
 
     if mode == "pro" and domain:
         domain_hex = str(domain).encode().hex()
-        return f"tg://proxy?server={domain}&port={port}&secret=ee{secret}{domain_hex}"
+        return f"https://t.me/proxy?server={domain}&port={port}&secret=ee{secret}{domain_hex}"
 
     code, stdout, _ = await sh("curl", "-s", "-4", "--max-time", "5", "https://api.ipify.org")
     server = stdout.strip() if code == 0 and stdout.strip() else "0.0.0.0"
     mask_host = config.get("mask_host", "")
     if mask_host:
         domain_hex = str(mask_host).encode().hex()
-        return f"tg://proxy?server={server}&port={port}&secret=ee{secret}{domain_hex}"
-    return f"tg://proxy?server={server}&port={port}&secret={secret}"
+        return f"https://t.me/proxy?server={server}&port={port}&secret=ee{secret}{domain_hex}"
+    return f"https://t.me/proxy?server={server}&port={port}&secret={secret}"
 
 
 # ============================================================================
@@ -2692,14 +2741,14 @@ async def cb_menu_admin_web(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     if get_user_lang(user_id) == "ru":
         status = "запущена" if running else "не запущена"
         text = (
-            f"<b>🖥 Web Admin</b>\n\n"
+            f"<b>🖥 Веб-админка</b>\n\n"
             f"Статус: <code>{status}</code>\n\n"
             "<b>Termius</b>\n"
             "1. Откройте сервер → Port Forwarding.\n"
             f"2. Добавьте Local tunnel: <code>127.0.0.1:{ADMIN_WEB_PORT}</code> → "
-            f"<code>127.0.0.1:{ADMIN_WEB_PORT}</code>.\n"
-            "3. Запустите tunnel и откройте в браузере:\n"
-            f"<code>{html.escape(local_url)}</code>\n\n"
+            f"<code>127.0.0.1:{ADMIN_WEB_PORT}</code> через свой VPS.\n"
+            "3. Сохраните правило и обязательно нажмите на него — так туннель запустится.\n"
+            "4. Откройте админку кнопкой под сообщением.\n\n"
             "<b>Обычный SSH</b>\n"
             f"<code>{html.escape(ssh_cmd)}</code>\n\n"
             "Админка слушает только localhost на сервере и не публикуется наружу."
@@ -2723,17 +2772,31 @@ async def cb_menu_admin_web(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     await safe_edit_message(
         query,
         text,
-        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton(_t(user_id, "btn_back"), callback_data="menu_main")]]),
+        reply_markup=InlineKeyboardMarkup([
+            [InlineKeyboardButton("Открыть веб-админку", url=local_url)],
+            [InlineKeyboardButton(_t(user_id, "btn_back"), callback_data="menu_main")],
+        ]),
         parse_mode="HTML",
         disable_web_page_preview=True,
     )
     if ADMIN_WEB_GUIDE.exists() and query.message:
         try:
-            guide = await query.message.reply_photo(
-                photo=InputFile(ADMIN_WEB_GUIDE),
-                caption="Termius → Port Forwarding → Local. В поле Intermediate host выберите свой VPS.",
-            )
-            asyncio.create_task(_delete_message_after(guide, 300))
+            previous_guide_id = context.user_data.pop("admin_web_guide_message_id", None)
+            if previous_guide_id:
+                try:
+                    await context.bot.delete_message(update.effective_chat.id, previous_guide_id)
+                except TelegramError:
+                    pass
+            with ADMIN_WEB_GUIDE.open("rb") as guide_file:
+                guide = await query.message.reply_photo(
+                    photo=guide_file,
+                    caption=(
+                        "Termius → Port Forwarding → Local. В поле Intermediate host "
+                        "выберите свой VPS. После сохранения нажмите на созданное правило, "
+                        "чтобы запустить туннель."
+                    ),
+                )
+            context.user_data["admin_web_guide_message_id"] = guide.message_id
         except TelegramError as exc:
             logger.warning("Failed to send Termius guide: %s", exc)
 
@@ -2947,7 +3010,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         await query.answer()
         buttons = get_main_menu(user_id)
         text = (
-            "<b>IGProxy · управление прокси</b>\n\n"
+            "<b>IGProxy · Управление прокси</b>\n\n"
             "Ключи, состояние, трафик, службы, бекапы и веб‑админка.\n"
             "Основано на <b>telemt</b> · сделано <b>ИГ</b>.\n\n"
             "Выберите действие:"
@@ -2958,6 +3021,13 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     if data == "close_menu":
         await query.answer()
         await query.delete_message()
+        launcher = await context.bot.send_message(
+            chat_id=update.effective_chat.id,
+            text="Управление закрыто. Кнопка внизу снова откроет меню.",
+            reply_markup=get_closed_menu_keyboard(),
+        )
+        context.user_data["closed_menu_message_id"] = launcher.message_id
+        context.user_data.pop("main_menu_message_id", None)
         return
 
     # Language picker
@@ -3014,6 +3084,28 @@ async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE
     if not is_user_allowed(update.effective_user.id):
         return
     user_id = update.effective_user.id
+    if update.message.text.strip() == "Открыть Управление":
+        closed_id = context.user_data.pop("closed_menu_message_id", None)
+        await hide_closed_menu_keyboard(update)
+        if closed_id:
+            try:
+                await context.bot.delete_message(update.effective_chat.id, closed_id)
+            except TelegramError:
+                pass
+        sent = await update.message.reply_text(
+            "<b>IGProxy · Управление прокси</b>\n\n"
+            "Ключи, состояние, трафик, службы, бекапы и веб‑админка.\n"
+            "Основано на <b>telemt</b> · сделано <b>ИГ</b>.\n\n"
+            "Выберите действие:",
+            reply_markup=get_main_menu(user_id),
+            parse_mode="HTML",
+        )
+        context.user_data["main_menu_message_id"] = sent.message_id
+        try:
+            await update.message.delete()
+        except TelegramError:
+            pass
+        return
     ip_limit_user = context.user_data.pop("awaiting_user_ip_limit", None)
     if ip_limit_user:
         await set_user_ip_limit_from_text(update, context, update.message.text.strip(), str(ip_limit_user))

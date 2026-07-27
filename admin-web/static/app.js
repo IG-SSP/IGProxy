@@ -506,10 +506,14 @@ const state = {
   trafficSmooth: true,
   trafficProxySeries: true,
   trafficSiteSeries: true,
+  trafficHideIdle: false,
+  trafficTableOrder: "newest",
   trafficLoading: false,
   userTrafficUser: "",
   userTrafficRange: "1h",
   userTrafficView: "chart",
+  userTrafficMetric: "rate",
+  userTrafficSmooth: true,
   userTraffic: null,
   userTrafficLoading: false,
   backupSchedule: null,
@@ -530,7 +534,7 @@ const state = {
 
 const t = (key) => (i18n[state.lang] && i18n[state.lang][key]) || i18n.en[key] || key;
 
-const trafficRanges = ["15m", "1h", "24h", "month"];
+const trafficRanges = ["15m", "1h", "6h", "24h", "7d", "month"];
 let autoRefreshTimer = null;
 
 const fmtBytes = (value = 0) => {
@@ -821,26 +825,43 @@ function renderRuntime() {
     return;
   }
   const revision = String(data.revision || state.overview?.runtime_summary?.revision || "--");
+  const total = Number(data.connections_total) || 0;
+  const badTotal = Number(data.connections_bad_total) || 0;
+  const badRatio = total ? Math.min(100, badTotal / total * 100) : 0;
+  const liveConnections = state.users.reduce((sum, user) => sum + (Number(user.traffic?.current_connections) || 0), 0);
+  const activeUsers = state.users.filter((user) => Number(user.traffic?.current_connections) > 0).length;
   const cards = [
-    [t("uptime"), fmtDuration(data.uptime_seconds)],
-    [t("connections"), data.connections_total ?? 0],
-    [t("badConnections"), data.connections_bad_total ?? 0],
-    [t("users"), data.configured_users ?? state.overview?.users_count ?? 0],
-    [t("revision"), revision.slice(0, 10)],
+    ["Состояние ядра", badRatio < 5 ? "Стабильно" : (badRatio < 20 ? "Есть сбои" : "Требует внимания"), badRatio < 5 ? "good" : "warn", `${badRatio.toFixed(1)}% неуспешных соединений`],
+    ["Сейчас через прокси", liveConnections, liveConnections ? "good" : "", `${activeUsers} активных ключей`],
+    ["Обработано соединений", total, "", `${badTotal} завершились ошибкой`],
+    [t("uptime"), fmtDuration(data.uptime_seconds), "good", `ревизия ${revision.slice(0, 10)}`],
   ];
-  stableHtml($("#runtimeCards"), cards.map(([label, value]) => `
-    <article>
+  stableHtml($("#runtimeCards"), cards.map(([label, value, level, hint]) => `
+    <article class="runtime-card ${escapeAttr(level)}">
       <span>${escapeHtml(label)}</span>
       <strong>${escapeHtml(value)}</strong>
+      <small>${escapeHtml(hint)}</small>
     </article>
   `).join(""), JSON.stringify(cards));
   const bad = Array.isArray(data.connections_bad_by_class) ? data.connections_bad_by_class : [];
-  stableHtml($("#runtimeIssues"), bad.length ? bad.map((item) => `
-    <div class="issue">
-      <span>${escapeHtml(item.class || "unknown")}</span>
-      <strong>${escapeHtml(item.total ?? 0)}</strong>
-    </div>
-  `).join("") : "", JSON.stringify(bad));
+  const explanations = {
+    client: "Клиент закрыл соединение или прислал неподходящий запрос.",
+    telegram: "Telegram DC временно не ответил или разорвал upstream.",
+    timeout: "Соединение не успело завершиться за допустимое время.",
+    protocol: "Ошибка протокола или несовместимый клиент.",
+    unknown: "Ядро не смогло точнее классифицировать причину.",
+  };
+  stableHtml($("#runtimeIssues"), bad.length ? `
+    <div class="runtime-issues-head"><strong>Причины сбоев</strong><span>накопительно с запуска</span></div>
+    ${bad.slice().sort((a, b) => Number(b.total || 0) - Number(a.total || 0)).slice(0, 6).map((item) => {
+      const rawClass = String(item.class || "unknown");
+      const key = Object.keys(explanations).find((candidate) => rawClass.toLowerCase().includes(candidate)) || "unknown";
+      const share = badTotal ? Math.min(100, Number(item.total || 0) / badTotal * 100) : 0;
+      return `<div class="issue" title="${escapeAttr(rawClass)}">
+        <div><strong>${escapeHtml(rawClass)}</strong><small>${escapeHtml(explanations[key])}</small></div>
+        <div class="issue-value"><strong>${escapeHtml(item.total ?? 0)}</strong><span style="--issue-share:${share}%"></span></div>
+      </div>`;
+    }).join("")}` : `<div class="runtime-clean">Ошибок по классам нет</div>`, JSON.stringify([bad, badTotal]));
 }
 
 function siteStatusText(site = {}) {
@@ -866,6 +887,12 @@ function renderSiteStatus() {
   statusEl.textContent = siteStatusText(site);
   statusEl.className = `metric-status ${siteStatusClass(site)}`;
   statusEl.title = site.url || "";
+  const proxyRunning = state.overview?.services?.telemt === "running";
+  const proxyEl = $("#proxyStatus");
+  proxyEl.textContent = proxyRunning ? "Прокси работает" : "Прокси остановлен";
+  proxyEl.className = `metric-status ${proxyRunning ? "ok" : "error"}`;
+  const bothOk = proxyRunning && site.ok;
+  $("#metricAvailability").textContent = bothOk ? "Оба работают" : (proxyRunning || site.ok ? "Частично доступно" : "Недоступно");
 }
 
 function renderOperationsSummary() {
@@ -904,7 +931,7 @@ function renderPort443(payload = {}) {
   const configuredPort = Number(payload.configured_port) || 443;
   $("#port443Number").textContent = String(configuredPort);
   $("#visualTitle").textContent = `Порт ${configuredPort}`;
-  $("#visualText").textContent = "Публичная точка входа и все сервисы за ней — без скачущих названий при обновлении.";
+  $("#visualText").textContent = "Публичная точка входа и сервисы за ней.";
   $("#port443Configured").textContent = configuredPort === 443 ? t("port443Public") : t("port443Configured").replace("{port}", configuredPort);
   if (payload.error) {
     summary.textContent = t("port443Error");
@@ -921,9 +948,9 @@ function renderPort443(payload = {}) {
     return `<article class="port-listener role-${escapeAttr(item.role || "other")}" title="${escapeAttr(title)}">
       <div>
         <strong>${escapeHtml(roleLabel(item.role))}</strong>
-        <span>${escapeHtml(item.process || "unknown")}${item.pid ? ` · pid ${escapeHtml(item.pid)}` : ""}</span>
+        <span>${escapeHtml(item.process || "unknown")} · принимает подключения</span>
       </div>
-      <small>${escapeHtml(item.proto || "--")} · ${escapeHtml(item.address || "--")}</small>
+      <small>${escapeHtml(item.proto || "--")} · порт ${escapeHtml(configuredPort)}</small>
     </article>`;
   }).join("") : `<div class="port-empty">${escapeHtml(payload.error || t("port443NoListeners"))}</div>`;
   const routeHtml = routes.length ? routes.map((item) => {
@@ -934,7 +961,7 @@ function renderPort443(payload = {}) {
         <strong>${escapeHtml(roleLabel(item.role))}</strong>
         <span>${escapeHtml(item.process || "unknown")}${item.status ? ` · ${escapeHtml(statusLabel(item.status))}` : ""}</span>
       </div>
-      <small>${escapeHtml(item.public || "--")} → ${escapeHtml(item.target || "--")}${via ? ` · ${escapeHtml(via)}` : ""}</small>
+      <small>${item.status ? escapeHtml(statusLabel(item.status)) : "маршрут настроен"}</small>
     </article>`;
   }).join("") : `<div class="port-empty">${escapeHtml(t("port443NoRoutes"))}</div>`;
   list.innerHTML = `
@@ -957,19 +984,23 @@ function renderOverview() {
   $("#sidebarVersion").textContent = `v${data.version || "--"}`;
   $("#sidebarBind").textContent = `${bind.host || "127.0.0.1"}:${bind.port || 1984}`;
   $("#settingsBind").textContent = `${bind.host || "127.0.0.1"}:${bind.port || 1984}`;
-  const mode = modePresentation(cfg.mode);
-  $("#metricMode").textContent = mode.label;
-  $("#metricMode").title = mode.help;
   renderSiteStatus();
   renderPort443(data.port_443 || {});
   const trafficRows = data.stats_history || [];
   const latest = trafficRows[trafficRows.length - 1] || {};
   const previous = trafficRows[trafficRows.length - 2] || {};
   const elapsed = Math.max(1, (Number(latest.epoch) || 0) - (Number(previous.epoch) || 0));
-  const currentRate = Math.max(0, (Number(latest.proxy_bytes) || 0) - (Number(previous.proxy_bytes) || 0)) / elapsed;
+  const latestProxy = Number(latest.proxy_bytes) || 0;
+  const previousProxy = Number(previous.proxy_bytes) || 0;
+  const currentDelta = Number(latest.proxy_delta) || (latestProxy >= previousProxy ? latestProxy - previousProxy : latestProxy);
+  const currentRate = Math.max(0, currentDelta) / elapsed;
+  const liveConnections = state.users.reduce((sum, user) => sum + (Number(user.traffic?.current_connections) || 0), 0);
+  const activeIps = state.users.reduce((sum, user) => sum + (Number(user.traffic?.active_unique_ips) || 0), 0);
   $("#portPublicAddress").textContent = `${cfg.domain || cfg.mask_host || "сервер"}:${cfg.port || 443}`;
   $("#portCurrentRate").textContent = `${fmtBytes(currentRate)}/с`;
   $("#portNetworkDc").textContent = cfg.network_dc_count || 1;
+  $("#portConnections").textContent = liveConnections;
+  $("#portActiveIps").textContent = activeIps;
   $("#networkDcCount").value = cfg.network_dc_count || 1;
   $("#metricUsers").textContent = data.users_count ?? 0;
   $("#metricProxyTraffic").textContent = fmtBytes(stats.proxy_bytes);
@@ -1016,6 +1047,8 @@ function updateTrafficControls() {
   $("#trafficSmooth").checked = state.trafficSmooth;
   $("#trafficProxySeries").checked = state.trafficProxySeries;
   $("#trafficSiteSeries").checked = state.trafficSiteSeries;
+  $("#trafficHideIdle").checked = state.trafficHideIdle;
+  $("#trafficTableOrder").value = state.trafficTableOrder;
 }
 
 function updateUserTrafficControls() {
@@ -1025,13 +1058,19 @@ function updateUserTrafficControls() {
   $$("[data-user-traffic-view]").forEach((btn) => {
     btn.classList.toggle("active", btn.dataset.userTrafficView === state.userTrafficView);
   });
+  $$("[data-user-traffic-metric]").forEach((btn) => {
+    btn.classList.toggle("active", btn.dataset.userTrafficMetric === state.userTrafficMetric);
+  });
+  $("#userTrafficSmooth").checked = state.userTrafficSmooth;
 }
 
 function trafficRangeLabel(range) {
   const labels = {
     "15m": t("range15m"),
     "1h": t("range1h"),
+    "6h": "6 часов",
     "24h": t("range24h"),
+    "7d": "7 дней",
     month: t("rangeMonth"),
   };
   return labels[range] || range;
@@ -1041,16 +1080,25 @@ function rangeSeconds(range) {
   return {
     "15m": 15 * 60,
     "1h": 60 * 60,
+    "6h": 6 * 60 * 60,
     "24h": 24 * 60 * 60,
+    "7d": 7 * 24 * 60 * 60,
     month: 30 * 24 * 60 * 60,
   }[range] || 60 * 60;
 }
 
 function filterTrafficRows(rows, range = state.trafficRange) {
   if (!Array.isArray(rows) || !rows.length) return [];
-  const latest = Math.max(...rows.map((row) => Number(row.epoch) || 0));
+  const deduped = new Map();
+  rows.forEach((row) => {
+    const epoch = Number(row.epoch) || 0;
+    if (epoch > 0) deduped.set(epoch, { ...row, epoch });
+  });
+  const ordered = Array.from(deduped.values()).sort((a, b) => a.epoch - b.epoch);
+  if (!ordered.length) return [];
+  const latest = ordered[ordered.length - 1].epoch;
   const cutoff = latest - rangeSeconds(range);
-  return rows.filter((row) => (Number(row.epoch) || 0) >= cutoff);
+  return ordered.filter((row) => row.epoch >= cutoff);
 }
 
 function bucketTrafficRows(rows) {
@@ -1147,7 +1195,10 @@ function renderTrafficInsights(rows) {
 
 function drawTrafficChart(rows) {
   const el = $("#trafficChart");
-  const rawPoints = bucketTrafficRows(rows);
+  let rawPoints = bucketTrafficRows(rows);
+  if (state.trafficHideIdle) {
+    rawPoints = rawPoints.filter((point) => (Number(point.proxy_delta) || 0) > 0 || (Number(point.site_delta) || 0) > 0);
+  }
   const points = rawPoints.map((point, index) => {
     const previous = rawPoints[Math.max(0, index - 1)];
     const next = rawPoints[Math.min(rawPoints.length - 1, index + 1)];
@@ -1180,7 +1231,9 @@ function drawTrafficChart(rows) {
   )));
   const plotW = width - pad.l - pad.r;
   const plotH = height - pad.t - pad.b;
-  const toX = (i) => pad.l + (plotW * i) / Math.max(1, points.length - 1);
+  const firstEpoch = Number(points[0].epoch) || 0;
+  const lastEpoch = Number(points[points.length - 1].epoch) || firstEpoch + 1;
+  const toX = (i) => pad.l + plotW * ((Number(points[i].epoch) || firstEpoch) - firstEpoch) / Math.max(1, lastEpoch - firstEpoch);
   const toY = (v) => pad.t + plotH - ((v || 0) / max) * plotH;
   const pathFor = (key) => {
     if (state.trafficSmooth) return smoothSvgPath(points, key, toX, toY);
@@ -1214,8 +1267,8 @@ function drawTrafficChart(rows) {
       </linearGradient>
     </defs>
     <g class="grid">${grid}</g>
-    ${state.trafficProxySeries ? `<path class="area proxy-area" style="fill:url(#proxyGradient)" d="${pathFor("proxy_value")} L${width - pad.r},${height - pad.b} L${pad.l},${height - pad.b} Z"></path><path class="line proxy-line" pathLength="1" d="${pathFor("proxy_value")}"></path><circle class="last-point" cx="${toX(points.length - 1)}" cy="${toY(lastProxy)}" r="5" fill="${proxyColor}"></circle>` : ""}
-    ${state.trafficSiteSeries ? `<path class="area site-area" style="fill:url(#siteGradient)" d="${pathFor("site_value")} L${width - pad.r},${height - pad.b} L${pad.l},${height - pad.b} Z"></path><path class="line site-line" pathLength="1" d="${pathFor("site_value")}"></path><circle class="last-point" cx="${toX(points.length - 1)}" cy="${toY(lastSite)}" r="5" fill="${siteColor}"></circle>` : ""}
+    ${state.trafficProxySeries ? `<path class="area proxy-area" style="fill:url(#proxyGradient)" d="${pathFor("proxy_value")} L${toX(points.length - 1)},${height - pad.b} L${toX(0)},${height - pad.b} Z"></path><path class="line proxy-line" pathLength="1" d="${pathFor("proxy_value")}"></path><circle class="last-point" cx="${toX(points.length - 1)}" cy="${toY(lastProxy)}" r="5" fill="${proxyColor}"></circle>` : ""}
+    ${state.trafficSiteSeries ? `<path class="area site-area" style="fill:url(#siteGradient)" d="${pathFor("site_value")} L${toX(points.length - 1)},${height - pad.b} L${toX(0)},${height - pad.b} Z"></path><path class="line site-line" pathLength="1" d="${pathFor("site_value")}"></path><circle class="last-point" cx="${toX(points.length - 1)}" cy="${toY(lastSite)}" r="5" fill="${siteColor}"></circle>` : ""}
     ${pointMarkers}
     <text x="${pad.l}" y="17" class="axis">${escapeHtml(axis)}</text>
     <text x="${pad.l - 8}" y="${pad.t + 4}" text-anchor="end" class="axis-value">${escapeHtml(valueLabel(max))}</text>
@@ -1223,7 +1276,7 @@ function drawTrafficChart(rows) {
     <text x="${pad.l}" y="${height - pad.b + 18}" class="axis-time">${escapeHtml(firstTime)}</text>
     <text x="${width - pad.r}" y="${height - pad.b + 18}" text-anchor="end" class="axis-time">${escapeHtml(lastTime)}</text>
   </svg>`;
-  stableHtml(el, html, JSON.stringify([state.trafficRange, state.theme, state.trafficMetric, state.trafficSmooth, state.trafficProxySeries, state.trafficSiteSeries, points]));
+  stableHtml(el, html, JSON.stringify([state.trafficRange, state.theme, state.trafficMetric, state.trafficSmooth, state.trafficProxySeries, state.trafficSiteSeries, state.trafficHideIdle, points]));
 }
 
 function renderHistoryTable(rows) {
@@ -1231,7 +1284,8 @@ function renderHistoryTable(rows) {
     $("#historyTable").innerHTML = `<tr><td colspan="5" class="empty-cell">${escapeHtml(t("noHistory"))}</td></tr>`;
     return;
   }
-  $("#historyTable").innerHTML = rows.map((row) => `
+  const ordered = state.trafficTableOrder === "oldest" ? rows.slice() : rows.slice().reverse();
+  $("#historyTable").innerHTML = ordered.map((row) => `
     <tr>
       <td data-label="${escapeAttr(t("tablePeriod"))}"><strong>${escapeHtml(trafficRangeLabel(row.range))}</strong><small>${escapeHtml(row.points ? `${row.points} ${t("historyRows").toLowerCase()}` : t("noTrafficForRange"))}</small></td>
       <td data-label="${escapeAttr(t("tableProxyDelta"))}">${escapeHtml(fmtBytes(row.proxy_delta))}</td>
@@ -1315,7 +1369,20 @@ function renderUserTrafficLoading() {
 
 function drawUserTrafficChart(rows) {
   const el = $("#userTrafficChart");
-  const points = bucketUserTrafficRows(rows);
+  const rawPoints = bucketUserTrafficRows(rows);
+  const points = rawPoints.map((point, index) => {
+    const previous = rawPoints[Math.max(0, index - 1)];
+    const next = rawPoints[Math.min(rawPoints.length - 1, index + 1)];
+    const seconds = Math.max(1, index
+      ? Number(point.epoch) - Number(previous.epoch)
+      : Number(next.epoch) - Number(point.epoch));
+    const value = state.userTrafficMetric === "total"
+      ? Number(point.total_octets) || 0
+      : (state.userTrafficMetric === "rate"
+        ? (Number(point.total_delta) || 0) / seconds
+        : Number(point.total_delta) || 0);
+    return { ...point, chart_value: value };
+  });
   const color = getComputedStyle(document.documentElement).getPropertyValue("--blue").trim() || "#2563eb";
   if (points.length < 2) {
     stableHtml(el, `<div class="empty-chart">
@@ -1327,20 +1394,26 @@ function drawUserTrafficChart(rows) {
   const width = 900;
   const height = 260;
   const pad = { l: 54, r: 22, t: 24, b: 42 };
-  const max = Math.max(1, ...points.map((p) => Number(p.total_delta) || 0));
+  const max = Math.max(1, ...points.map((p) => Number(p.chart_value) || 0));
   const plotW = width - pad.l - pad.r;
   const plotH = height - pad.t - pad.b;
-  const toX = (i) => pad.l + (plotW * i) / Math.max(1, points.length - 1);
+  const firstEpoch = Number(points[0].epoch) || 0;
+  const lastEpoch = Number(points[points.length - 1].epoch) || firstEpoch + 1;
+  const toX = (i) => pad.l + plotW * ((Number(points[i].epoch) || firstEpoch) - firstEpoch) / Math.max(1, lastEpoch - firstEpoch);
   const toY = (v) => pad.t + plotH - ((v || 0) / max) * plotH;
-  const path = smoothSvgPath(points, "total_delta", toX, toY);
+  const path = state.userTrafficSmooth
+    ? smoothSvgPath(points, "chart_value", toX, toY)
+    : points.map((point, index) => `${index ? "L" : "M"}${toX(index).toFixed(1)},${toY(point.chart_value).toFixed(1)}`).join(" ");
   const grid = Array.from({ length: 5 }, (_, i) => {
     const y = pad.t + (plotH / 4) * i;
     return `<line x1="${pad.l}" y1="${y}" x2="${width - pad.r}" y2="${y}"></line>`;
   }).join("");
-  const axis = t("chartMax").replace("{value}", fmtBytes(max));
+  const suffix = state.userTrafficMetric === "rate" ? "/с" : "";
+  const modeLabel = state.userTrafficMetric === "rate" ? "скорость" : (state.userTrafficMetric === "total" ? "накопительный итог" : "за интервал");
+  const axis = `макс. ${fmtBytes(max)}${suffix} · ${modeLabel}`;
   const firstTime = compactTime(points[0].epoch);
   const lastTime = compactTime(points[points.length - 1].epoch);
-  const lastValue = Number(points[points.length - 1].total_delta) || 0;
+  const lastValue = Number(points[points.length - 1].chart_value) || 0;
   const html = `<svg viewBox="0 0 ${width} ${height}" role="img" aria-label="${escapeAttr(t("ariaTrafficHistory"))}">
     <defs>
       <linearGradient id="userGradient" x1="0" y1="0" x2="0" y2="1">
@@ -1349,16 +1422,16 @@ function drawUserTrafficChart(rows) {
       </linearGradient>
     </defs>
     <g class="grid">${grid}</g>
-    <path class="area proxy-area" style="fill:url(#userGradient)" d="${path} L${width - pad.r},${height - pad.b} L${pad.l},${height - pad.b} Z"></path>
+    <path class="area proxy-area" style="fill:url(#userGradient)" d="${path} L${toX(points.length - 1)},${height - pad.b} L${toX(0)},${height - pad.b} Z"></path>
     <path class="line proxy-line" pathLength="1" d="${path}"></path>
     <circle class="last-point" cx="${toX(points.length - 1)}" cy="${toY(lastValue)}" r="5" fill="${color}"></circle>
     <text x="${pad.l}" y="17" class="axis">${escapeHtml(axis)}</text>
-    <text x="${pad.l - 8}" y="${pad.t + 4}" text-anchor="end" class="axis-value">${escapeHtml(fmtBytes(max))}</text>
-    <text x="${pad.l - 8}" y="${pad.t + plotH / 2 + 4}" text-anchor="end" class="axis-value">${escapeHtml(fmtBytes(max / 2))}</text>
+    <text x="${pad.l - 8}" y="${pad.t + 4}" text-anchor="end" class="axis-value">${escapeHtml(`${fmtBytes(max)}${suffix}`)}</text>
+    <text x="${pad.l - 8}" y="${pad.t + plotH / 2 + 4}" text-anchor="end" class="axis-value">${escapeHtml(`${fmtBytes(max / 2)}${suffix}`)}</text>
     <text x="${pad.l}" y="${height - pad.b + 18}" class="axis-time">${escapeHtml(firstTime)}</text>
     <text x="${width - pad.r}" y="${height - pad.b + 18}" text-anchor="end" class="axis-time">${escapeHtml(lastTime)}</text>
   </svg>`;
-  stableHtml(el, html, JSON.stringify([state.userTrafficUser, state.userTrafficRange, state.theme, points]));
+  stableHtml(el, html, JSON.stringify([state.userTrafficUser, state.userTrafficRange, state.userTrafficMetric, state.userTrafficSmooth, state.theme, points]));
 }
 
 function renderUserTrafficInsights(rows) {
@@ -1606,6 +1679,9 @@ function renderSiteSettings() {
   $("#siteKey").innerHTML = enabledKeys.map((item) => `
     <option value="${escapeAttr(item.name)}" ${item.name === data.key ? "selected" : ""}>${escapeHtml(item.name)}</option>
   `).join("");
+  $("#customSiteKey").innerHTML = enabledKeys.map((item) => `
+    <option value="${escapeAttr(item.name)}" ${item.name === data.key ? "selected" : ""}>${escapeHtml(item.name)}</option>
+  `).join("");
 }
 
 async function saveSiteSettings() {
@@ -1618,6 +1694,28 @@ async function saveSiteSettings() {
     });
     renderSiteSettings();
     toast("Сайт опубликован");
+    await refreshAll({ silent: true });
+  } finally {
+    button.disabled = false;
+  }
+}
+
+async function saveCustomSite() {
+  const file = $("#customSiteFile").files?.[0];
+  if (!file) throw new Error("Выберите HTML-файл");
+  if (file.size > 512 * 1024) throw new Error("HTML больше 512 КБ");
+  const source = await file.text();
+  const button = $("#customSiteForm button[type=submit]");
+  button.disabled = true;
+  try {
+    state.siteSettings = await api("/api/site/custom", {
+      method: "POST",
+      body: JSON.stringify({ html: source, key: $("#customSiteKey").value }),
+    });
+    state.selectedSitePreset = "custom";
+    renderSiteSettings();
+    $("#customSiteFile").value = "";
+    toast("Свой сайт опубликован");
     await refreshAll({ silent: true });
   } finally {
     button.disabled = false;
@@ -2096,6 +2194,9 @@ document.addEventListener("click", async (eventObj) => {
     } else if (button.dataset.userTrafficView) {
       state.userTrafficView = button.dataset.userTrafficView === "table" ? "table" : "chart";
       renderUserTraffic();
+    } else if (button.dataset.userTrafficMetric) {
+      state.userTrafficMetric = ["rate", "delta", "total"].includes(button.dataset.userTrafficMetric) ? button.dataset.userTrafficMetric : "rate";
+      renderUserTraffic();
     } else if (button.dataset.userFilter) {
       state.userFilter = ["enabled", "disabled", "online"].includes(button.dataset.userFilter) ? button.dataset.userFilter : "all";
       renderUsers();
@@ -2145,6 +2246,21 @@ document.addEventListener("change", (eventObj) => {
     renderStats();
     return;
   }
+  if (eventObj.target.id === "trafficHideIdle") {
+    state.trafficHideIdle = eventObj.target.checked;
+    renderStats();
+    return;
+  }
+  if (eventObj.target.id === "trafficTableOrder") {
+    state.trafficTableOrder = eventObj.target.value === "oldest" ? "oldest" : "newest";
+    renderStats();
+    return;
+  }
+  if (eventObj.target.id === "userTrafficSmooth") {
+    state.userTrafficSmooth = eventObj.target.checked;
+    renderUserTraffic();
+    return;
+  }
   const input = eventObj.target.closest("[data-toggle-user]");
   if (!input) return;
   input.disabled = true;
@@ -2173,6 +2289,10 @@ $("#generalSettingsForm").addEventListener("submit", (eventObj) => {
 $("#siteSettingsForm").addEventListener("submit", (eventObj) => {
   eventObj.preventDefault();
   saveSiteSettings().catch((err) => toast(err.message));
+});
+$("#customSiteForm").addEventListener("submit", (eventObj) => {
+  eventObj.preventDefault();
+  saveCustomSite().catch((err) => toast(err.message));
 });
 $("#userSearch").addEventListener("input", (eventObj) => {
   state.userSearch = eventObj.target.value || "";

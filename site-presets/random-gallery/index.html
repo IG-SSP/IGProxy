@@ -1,0 +1,71 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="theme-color" content="#0b1220">
+  <title>Мастерская маршрутов</title>
+  <style>
+    *{box-sizing:border-box}html,body{min-height:100%;margin:0}body{--a:#7dd3fc;--b:#a78bfa;--ink:#f8fafc;--muted:#aab7c8;--panel:rgba(13,23,39,.78);font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;color:var(--ink);background:#07101d;overflow-x:hidden}
+    body::before,body::after{content:"";position:fixed;z-index:-2;border-radius:50%;filter:blur(2px);opacity:.82}
+    body::before{width:62vw;height:62vw;left:-18vw;top:-24vw;background:radial-gradient(circle,var(--a),transparent 67%)}
+    body::after{width:56vw;height:56vw;right:-17vw;bottom:-25vw;background:radial-gradient(circle,var(--b),transparent 67%)}
+    .noise{position:fixed;inset:0;z-index:-1;opacity:.15;background-image:linear-gradient(rgba(255,255,255,.05) 1px,transparent 1px),linear-gradient(90deg,rgba(255,255,255,.05) 1px,transparent 1px);background-size:40px 40px;mask-image:linear-gradient(to bottom,#000,transparent)}
+    main{width:min(1180px,calc(100% - 32px));min-height:100vh;margin:auto;display:grid;grid-template-columns:minmax(0,1.05fr) minmax(320px,.95fr);align-items:center;gap:clamp(30px,6vw,90px);padding:54px 0}
+    .copy{max-width:660px}.badge{display:inline-flex;align-items:center;gap:9px;padding:8px 12px;border:1px solid rgba(255,255,255,.14);border-radius:999px;background:rgba(6,13,24,.42);backdrop-filter:blur(12px);color:#dce8f7;font-size:12px;font-weight:800;letter-spacing:.08em;text-transform:uppercase}.badge i{width:9px;height:9px;border-radius:50%;background:var(--a);box-shadow:0 0 18px var(--a)}
+    h1{margin:22px 0 16px;font-size:clamp(44px,7vw,88px);line-height:.98;letter-spacing:-.055em;text-wrap:balance}p{max-width:610px;margin:0;color:var(--muted);font-size:clamp(17px,2vw,21px);line-height:1.58}
+    .actions{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-top:30px}.primary,.secondary{min-height:54px;border:0;border-radius:16px;padding:0 20px;font:inherit;font-weight:850;cursor:pointer;transition:transform .18s ease,filter .18s ease}.primary{display:inline-flex;align-items:center;gap:10px;text-decoration:none;color:#07101d;background:linear-gradient(135deg,var(--a),var(--b));box-shadow:0 16px 40px color-mix(in srgb,var(--a) 25%,transparent)}.secondary{color:var(--ink);border:1px solid rgba(255,255,255,.15);background:rgba(9,18,31,.66);backdrop-filter:blur(12px)}.primary:hover,.secondary:hover{transform:translateY(-2px);filter:brightness(1.08)}#copied{width:100%;min-height:20px;color:var(--a);font-size:13px;font-weight:750}
+    .scene{position:relative;min-height:560px;display:grid;place-items:center}.card{position:relative;width:min(460px,100%);aspect-ratio:.82;border:1px solid rgba(255,255,255,.16);border-radius:34px;background:linear-gradient(145deg,rgba(255,255,255,.12),rgba(8,16,29,.78));box-shadow:0 40px 100px rgba(0,0,0,.42);backdrop-filter:blur(22px);overflow:hidden;transform:rotate(2deg)}
+    .orbit{position:absolute;inset:14%;border:1px solid color-mix(in srgb,var(--a) 48%,transparent);border-radius:50%;animation:spin 18s linear infinite}.orbit:nth-child(2){inset:25%;border-color:color-mix(in srgb,var(--b) 60%,transparent);animation-direction:reverse;animation-duration:12s}.orb{position:absolute;width:22px;height:22px;left:50%;top:-11px;border-radius:50%;background:var(--a);box-shadow:0 0 26px var(--a)}
+    .window{position:absolute;inset:32% 16% 18%;display:grid;align-content:center;gap:13px;border:1px solid rgba(255,255,255,.12);border-radius:25px;background:rgba(5,12,22,.74);padding:24px;box-shadow:inset 0 1px rgba(255,255,255,.08)}.dots{display:flex;gap:6px}.dots i{width:9px;height:9px;border-radius:50%;background:var(--a)}.dots i:nth-child(2){background:var(--b)}.dots i:nth-child(3){background:#34d399}.route{height:8px;border-radius:99px;background:linear-gradient(90deg,var(--a),var(--b));box-shadow:0 0 22px color-mix(in srgb,var(--a) 55%,transparent)}.route:nth-of-type(2){width:76%;opacity:.62}.route:nth-of-type(3){width:54%;opacity:.35}.figure{position:absolute;left:50%;top:16%;transform:translateX(-50%);font-size:74px;filter:drop-shadow(0 20px 24px rgba(0,0,0,.35))}
+    .caption{position:absolute;left:22px;right:22px;bottom:22px;display:flex;justify-content:space-between;gap:16px;color:#dbeafe;font-size:12px;font-weight:800;text-transform:uppercase;letter-spacing:.09em}.float{position:absolute;padding:10px 14px;border:1px solid rgba(255,255,255,.15);border-radius:14px;background:rgba(7,15,28,.78);color:#e5eef9;font-weight:800;box-shadow:0 16px 44px rgba(0,0,0,.28);animation:bob 4.6s ease-in-out infinite}.f1{left:-18px;top:15%}.f2{right:-28px;bottom:18%;animation-delay:-2.1s}
+    @keyframes spin{to{transform:rotate(360deg)}}@keyframes bob{50%{transform:translateY(-10px)}}
+    @media(max-width:820px){main{grid-template-columns:1fr;padding:38px 0 30px}.copy{text-align:center;margin:auto}.badge,.actions{justify-content:center}.scene{min-height:440px}.card{width:min(400px,88vw);aspect-ratio:.9}.f1{left:0}.f2{right:0}}
+    @media(max-width:480px){main{width:min(100% - 22px,1180px);padding-top:24px}h1{font-size:clamp(42px,14vw,62px)}p{font-size:16px}.actions{display:grid}.primary,.secondary{width:100%;justify-content:center}.scene{min-height:390px}.card{border-radius:25px}.figure{font-size:60px}.float{font-size:11px}.window{padding:18px}.caption{font-size:10px}}
+  </style>
+</head>
+<body>
+  <div class="noise"></div>
+  <main>
+    <section class="copy">
+      <span class="badge"><i></i><span id="badge">Тихая мастерская</span></span>
+      <h1 id="title">Чиним маршруты, пока город спит</h1>
+      <p id="text">Иногда письмо знает дорогу лучше сторожа у ворот. Мы лишь оставили ему открытое окно.</p>
+      <div class="actions">
+        <a class="primary" id="connect" href="__PROXY_LINK__"><span id="action">Открыть окно</span><span>↗</span></a>
+        <button class="secondary" id="copy" type="button">Скопировать ссылку</button>
+        <span id="copied" role="status"></span>
+      </div>
+    </section>
+    <section class="scene" aria-hidden="true">
+      <div class="card">
+        <div class="orbit"><i class="orb"></i></div><div class="orbit"><i class="orb"></i></div>
+        <div class="figure" id="figure">🕊️</div>
+        <div class="window"><div class="dots"><i></i><i></i><i></i></div><div class="route"></div><div class="route"></div><div class="route"></div></div>
+        <div class="caption"><span id="sceneLeft">маршрут готов</span><span id="sceneRight">окно открыто</span></div>
+      </div>
+      <span class="float f1" id="floatOne">обходной мост</span><span class="float f2" id="floatTwo">свет горит</span>
+    </section>
+  </main>
+  <script>
+    const stories=[
+      ["Тихая мастерская","Чиним маршруты, пока город спит","Иногда письмо знает дорогу лучше сторожа у ворот. Мы лишь оставили ему открытое окно.","Открыть окно","🕊️","#7dd3fc","#a78bfa","маршрут готов","окно открыто","обходной мост","свет горит"],
+      ["Сад воздушных троп","Улитка нашла короткую дорогу","Каменные ворота спорили о правилах, а маленький курьер просто пошёл по росе.","Пойти по росе","🐌","#34d399","#60a5fa","роса свежая","тропа свободна","без очереди","тише ворот"],
+      ["Ночная библиотека","Книги снова умеют плавать","Когда мост подняли, страницы сложились лодками и нашли другой берег.","Спустить лодку","🦉","#f59e0b","#8b5cf6","книги на борту","берег виден","тихий причал","фонарь зажжён"],
+      ["Облачная почта","Письма выбирают ветер","Смотрители считали конверты, но забыли посчитать направления ветра.","Поймать ветер","✉️","#38bdf8","#f472b6","ветер попутный","печать цела","мимо башни","точно в срок"],
+      ["Чайная у перевала","Для путника всегда есть второй перевал","Если главная дорога закрыта снегом, хозяин чайной рисует новую прямо на салфетке.","Взять карту","🫖","#fb7185","#fbbf24","чай горячий","карта готова","второй перевал","огонь не гаснет"],
+      ["Маяк для бумажных птиц","Свет не спрашивает разрешения","Маяк просто светит. Бумажные птицы сами решают, к какому берегу лететь.","Увидеть маяк","🗼","#22d3ee","#818cf8","луч стабилен","берег отвечает","выше тумана","курс свободен"],
+      ["Оркестр обходных нот","Музыка проходит между стен","Одна нота не нашла дверь, зато весь аккорд легко прошёл через открытое окно.","Слушать аккорд","🎺","#f97316","#ec4899","ритм ровный","окно открыто","мимо тишины","без фальши"],
+      ["Оранжерея мостов","Каждая ветка знает соседний берег","Садовник не ломал ограду — он вырастил над ней зелёную арку.","Пройти под аркой","🌿","#4ade80","#2dd4bf","ветка крепкая","берег рядом","растёт ночью","сад дышит"],
+      ["Станция лунных трамваев","Последний вагон всегда идёт дальше","На табло написали «конечная», но рельсы под луной продолжились за горизонт.","Сесть в трамвай","🚋","#c084fc","#60a5fa","рельсы поют","вагон готов","следующая луна","билет найден"],
+      ["Картографы дождя","Капли рисуют новые улицы","Старая карта промокла, и именно поэтому на ней появились нужные проходы.","Открыть карту","🌧️","#67e8f9","#a3e635","дождь начался","линии видны","новая улица","зонт не нужен"]
+    ];
+    const bytes=new Uint32Array(1);crypto.getRandomValues(bytes);const s=stories[bytes[0]%stories.length];
+    ["badge","title","text","action","figure"].forEach((id,i)=>document.getElementById(id).textContent=s[i]);
+    ["sceneLeft","sceneRight","floatOne","floatTwo"].forEach((id,i)=>document.getElementById(id).textContent=s[i+7]);
+    document.body.style.setProperty("--a",s[5]);document.body.style.setProperty("--b",s[6]);
+    const link=document.getElementById("connect").href,status=document.getElementById("copied");
+    document.getElementById("copy").addEventListener("click",async()=>{try{await navigator.clipboard.writeText(link)}catch(e){const t=document.createElement("textarea");t.value=link;t.style.position="fixed";t.style.opacity="0";document.body.appendChild(t);t.select();document.execCommand("copy");t.remove()}status.textContent="Ссылка скопирована";setTimeout(()=>status.textContent="",2200)});
+  </script>
+</body>
+</html>

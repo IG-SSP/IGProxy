@@ -327,6 +327,62 @@ class AdminFeatureTests(unittest.TestCase):
         self.assertIn('"route-workshop"', server)
         self.assertIn(".site-preset-card", styles)
 
+    def test_dashboard_uses_full_width_and_operational_status_cards(self):
+        html = INDEX_PATH.read_text(encoding="utf-8")
+        styles = (ROOT / "admin-web" / "static" / "styles.css").read_text(encoding="utf-8")
+        script = APP_JS_PATH.read_text(encoding="utf-8")
+        self.assertIn(".content {\n  width: 100%;", styles)
+        self.assertNotIn("width: min(1480px, 100%)", styles)
+        self.assertIn('id="proxyStatus"', html)
+        self.assertIn('id="portConnections"', html)
+        self.assertIn('id="portActiveIps"', html)
+        self.assertNotIn("без скачущих названий", script)
+        self.assertIn("Причины сбоев", script)
+
+    def test_traffic_controls_and_charts_support_real_time_axis(self):
+        html = INDEX_PATH.read_text(encoding="utf-8")
+        script = APP_JS_PATH.read_text(encoding="utf-8")
+        self.assertIn('data-traffic-range="6h"', html)
+        self.assertIn('data-traffic-range="7d"', html)
+        self.assertIn('id="trafficHideIdle"', html)
+        self.assertIn('id="trafficTableOrder"', html)
+        self.assertIn("new Map()", script)
+        self.assertIn("lastEpoch - firstEpoch", script)
+        self.assertIn("userTrafficMetric", script)
+
+    def test_random_and_custom_sites_are_available(self):
+        server = SERVER_PATH.read_text(encoding="utf-8")
+        html = INDEX_PATH.read_text(encoding="utf-8")
+        random_site = (ROOT / "site-presets" / "random-gallery" / "index.html").read_text(encoding="utf-8")
+        self.assertIn('"random-gallery"', server)
+        self.assertIn("apply_custom_site", server)
+        self.assertIn("/api/site/custom", server)
+        self.assertIn('id="customSiteForm"', html)
+        self.assertEqual(len(re.findall(r'^\s+\[".*?","#[0-9a-f]{6}","#[0-9a-f]{6}"', random_site, re.M)), 10)
+        self.assertIn("Скопировать ссылку", random_site)
+        self.assertIn("__PROXY_LINK__", random_site)
+
+    def test_counter_resets_are_counted_as_new_traffic(self):
+        previous = os.environ.get("GOTELEGRAM_STATS_HISTORY")
+        try:
+            with tempfile.TemporaryDirectory() as raw:
+                root = Path(raw)
+                history = root / "stats.csv"
+                history.write_text(
+                    "epoch,proxy_bytes,site_bytes\n100,1000,500\n160,1200,600\n220,40,20\n",
+                    encoding="utf-8",
+                )
+                os.environ["GOTELEGRAM_STATS_HISTORY"] = str(history)
+                server = load_server(root)
+                rows = server.load_stats_history()
+        finally:
+            if previous is None:
+                os.environ.pop("GOTELEGRAM_STATS_HISTORY", None)
+            else:
+                os.environ["GOTELEGRAM_STATS_HISTORY"] = previous
+        self.assertEqual(rows[-1]["proxy_delta"], 40)
+        self.assertEqual(rows[-1]["site_delta"], 20)
+
     def test_site_preset_is_rendered_for_selected_key_and_is_world_readable(self):
         with tempfile.TemporaryDirectory() as raw:
             root = Path(raw)

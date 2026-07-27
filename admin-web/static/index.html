@@ -11,13 +11,19 @@
       document.documentElement.dataset.theme = theme;
     }());
   </script>
-  <link rel="stylesheet" href="/styles.css?v=clean-0.3">
+  <link rel="stylesheet" href="/styles.css?v=igproxy-0.6">
 </head>
 <body>
   <div class="app-shell">
     <aside class="sidebar" id="sidebar">
       <div class="brand">
-        <div class="brand-mark">GT</div>
+        <div class="brand-mark" aria-hidden="true">
+          <svg viewBox="0 0 48 48" role="img">
+            <circle cx="24" cy="24" r="22"></circle>
+            <path class="brand-plane" d="M12 23.4 35.1 14c1.1-.4 2.1.3 1.8 1.8l-3.9 18.5c-.3 1.3-1.1 1.6-2.2 1l-6-4.4-2.9 2.8c-.3.3-.6.6-1.2.6l.4-6.1 11.1-10c.5-.4-.1-.7-.7-.3l-13.7 8.6-5.9-1.8c-1.3-.4-1.3-1.3.1-1.8Z"></path>
+            <path class="brand-spark" d="m36.5 6.5 1.2 3.2 3.3 1.2-3.3 1.2-1.2 3.2-1.2-3.2-3.3-1.2 3.3-1.2Z"></path>
+          </svg>
+        </div>
         <div>
           <strong>IGProxy</strong>
           <span data-i18n="brandSubtitle">Local Admin</span>
@@ -83,11 +89,13 @@
             <div>
               <p class="eyebrow">IGProxy</p>
               <h2 id="visualTitle">Port 443</h2>
-              <p id="visualText">Website, MTProxy and local admin status in one operational view.</p>
+              <p id="visualText">Публичная точка входа и сервисы за ней.</p>
               <div class="port-facts">
                 <div><span>Публичный адрес</span><strong id="portPublicAddress">--</strong></div>
                 <div><span>Текущая скорость</span><strong id="portCurrentRate">--</strong></div>
                 <div><span>DC в сети</span><strong id="portNetworkDc">1</strong></div>
+                <div><span>Подключения</span><strong id="portConnections">0</strong></div>
+                <div><span>Активные IP</span><strong id="portActiveIps">0</strong></div>
               </div>
             </div>
             <div class="port-map" id="port443Map">
@@ -104,10 +112,13 @@
 
           <div class="metric-grid">
             <article class="metric-card accent-blue">
-              <span data-i18n="metricMode">Схема публикации</span>
-              <strong id="metricMode">--</strong>
+              <span>Сайт и прокси</span>
+              <strong id="metricAvailability">--</strong>
               <small id="metricDomain">--</small>
-              <small id="siteStatus" class="metric-status">--</small>
+              <div class="availability-row">
+                <small id="proxyStatus" class="metric-status">--</small>
+                <small id="siteStatus" class="metric-status">--</small>
+              </div>
             </article>
             <article class="metric-card accent-green">
               <span data-i18n="metricKeys">Keys</span>
@@ -183,7 +194,9 @@
               <div class="segmented" id="trafficRange" aria-label="Traffic range" data-i18n-aria-label="ariaTrafficRange">
                 <button type="button" data-traffic-range="15m" data-i18n="range15m">15 min</button>
                 <button type="button" data-traffic-range="1h" data-i18n="range1h">1 hour</button>
+                <button type="button" data-traffic-range="6h">6 часов</button>
                 <button type="button" data-traffic-range="24h" data-i18n="range24h">24 hours</button>
+                <button type="button" data-traffic-range="7d">7 дней</button>
                 <button type="button" data-traffic-range="month" data-i18n="rangeMonth">Month</button>
               </div>
               <div class="segmented" id="trafficView" aria-label="Traffic view" data-i18n-aria-label="ariaTrafficView">
@@ -198,6 +211,13 @@
               <label class="chart-check"><input id="trafficSmooth" type="checkbox" checked> Сглаживание</label>
               <label class="chart-check"><input id="trafficProxySeries" type="checkbox" checked> Прокси</label>
               <label class="chart-check"><input id="trafficSiteSeries" type="checkbox" checked> Сайт</label>
+              <label class="chart-check"><input id="trafficHideIdle" type="checkbox"> Скрывать нулевые интервалы</label>
+              <label class="compact-select">Таблица
+                <select id="trafficTableOrder">
+                  <option value="newest">новые сверху</option>
+                  <option value="oldest">старые сверху</option>
+                </select>
+              </label>
             </div>
             <div id="trafficInsights" class="chart-insights" aria-live="polite"></div>
             <div id="trafficChart" class="traffic-chart"></div>
@@ -275,13 +295,21 @@
               <div class="segmented" id="userTrafficRange" aria-label="User traffic range" data-i18n-aria-label="ariaTrafficRange">
                 <button type="button" data-user-traffic-range="15m" data-i18n="range15m">15 min</button>
                 <button type="button" data-user-traffic-range="1h" data-i18n="range1h">1 hour</button>
+                <button type="button" data-user-traffic-range="6h">6 часов</button>
                 <button type="button" data-user-traffic-range="24h" data-i18n="range24h">24 hours</button>
+                <button type="button" data-user-traffic-range="7d">7 дней</button>
                 <button type="button" data-user-traffic-range="month" data-i18n="rangeMonth">Month</button>
               </div>
               <div class="segmented" id="userTrafficView" aria-label="User traffic view" data-i18n-aria-label="ariaTrafficView">
                 <button type="button" data-user-traffic-view="chart" data-i18n="viewChart">Chart</button>
                 <button type="button" data-user-traffic-view="table" data-i18n="viewRows">Rows</button>
               </div>
+              <div class="segmented" id="userTrafficMetric" aria-label="Единицы графика ключа">
+                <button type="button" data-user-traffic-metric="rate" class="active">Скорость</button>
+                <button type="button" data-user-traffic-metric="delta">За интервал</button>
+                <button type="button" data-user-traffic-metric="total">Накопительно</button>
+              </div>
+              <label class="chart-check"><input id="userTrafficSmooth" type="checkbox" checked> Сглаживание</label>
             </div>
             <div id="userTrafficInsights" class="chart-insights" aria-live="polite"></div>
             <div id="userTrafficChart" class="traffic-chart"></div>
@@ -439,6 +467,23 @@
               </label>
               <button type="submit">Опубликовать выбранный сайт</button>
             </form>
+            <details class="custom-site-box">
+              <summary>Загрузить свою страницу</summary>
+              <p>Поддерживается один автономный HTML-файл до 512 КБ. В ссылке главной кнопки оставьте плейсхолдер <code>__PROXY_LINK__</code>.</p>
+              <form id="customSiteForm" class="settings-form">
+                <label>HTML-файл
+                  <input id="customSiteFile" type="file" accept=".html,text/html" required>
+                </label>
+                <label>Ключ для кнопки
+                  <select id="customSiteKey"></select>
+                </label>
+                <button type="submit">Опубликовать свой HTML</button>
+              </form>
+              <details class="prompt-example">
+                <summary>Пример промта для генерации страницы</summary>
+                <pre>Создай один автономный адаптивный index.html без внешних библиотек и сетевых шрифтов. Это красивая аллегорическая страница о свободном маршруте: без прямых политических лозунгов, хорошо выглядит на телефоне и ПК, быстро загружается. Добавь одну большую CTA-кнопку со ссылкой __PROXY_LINK__ и рядом кнопку копирования этой ссылки в буфер. Весь CSS и JavaScript помести внутрь HTML.</pre>
+              </details>
+            </details>
           </section>
         </section>
       </main>
@@ -458,6 +503,6 @@
       <button id="qrCopyBtn" type="button" class="soft" data-i18n="copyLink">Copy link</button>
     </div>
   </div>
-  <script src="/app.js?v=igproxy-0.5" type="module"></script>
+  <script src="/app.js?v=igproxy-0.6" type="module"></script>
 </body>
 </html>

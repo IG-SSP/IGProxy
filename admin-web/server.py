@@ -52,7 +52,7 @@ SITE_PRESETS_DIR = Path(os.getenv("GOTELEGRAM_SITE_PRESETS", "/opt/gotelegram/cu
 
 HOST = os.getenv("GOTELEGRAM_ADMIN_HOST", "127.0.0.1")
 PORT = int(os.getenv("GOTELEGRAM_ADMIN_PORT", "1984"))
-VERSION = "2.8.1"  # fallback only; live value read from config.json
+VERSION = "2.9.0"  # fallback only; live value read from config.json
 RUNTIME_COMMON_PATHS = (
     INSTALL_DIR / "current" / "lib" / "common.sh",
     Path(__file__).resolve().parents[1] / "lib" / "common.sh",
@@ -67,7 +67,9 @@ _LAST_TELEMT_RESTART = 0.0
 TRAFFIC_WINDOWS = {
     "15m": 15 * 60,
     "1h": 60 * 60,
+    "6h": 6 * 60 * 60,
     "24h": 24 * 60 * 60,
+    "7d": 7 * 24 * 60 * 60,
     "month": 30 * 24 * 60 * 60,
 }
 
@@ -211,6 +213,10 @@ def public_config(config: dict[str, Any]) -> dict[str, Any]:
 
 
 SITE_PRESETS = {
+    "random-gallery": {
+        "name": "Десять случайных басен",
+        "description": "Лёгкая витрина без внешних файлов: одна из десяти историй выбирается при открытии.",
+    },
     "route-workshop": {
         "name": "Маршрутная мастерская",
         "description": "Playful 3D-заглушка с улитками, картой и светящимися маршрутами.",
@@ -230,7 +236,7 @@ def site_settings_payload() -> dict[str, Any]:
     config = load_json(GOTELEGRAM_CONFIG, {}) or {}
     records = read_user_records()
     return {
-        "preset": str(config.get("site_preset") or ""),
+        "preset": str(config.get("site_preset") or "random-gallery"),
         "key": str(config.get("site_key") or ("main" if "main" in records else "")),
         "presets": [
             {"id": key, **value, "available": (SITE_PRESETS_DIR / key / "index.html").exists()}
@@ -243,42 +249,52 @@ def site_settings_payload() -> dict[str, Any]:
     }
 
 
-def apply_site_preset(preset: str, key_name: str) -> dict[str, Any]:
-    if preset not in SITE_PRESETS:
-        raise ValueError("unknown site preset")
+def _enabled_site_key(key_name: str) -> tuple[dict[str, Any], str]:
     records = read_user_records()
     record = records.get(key_name)
     if not record or not record.get("enabled"):
         raise ValueError("select an enabled key")
+    return record, proxy_link(str(record["secret"]))
+
+
+def _publish_site_stage(stage: Path, preset: str, key_name: str) -> dict[str, Any]:
+    previous = WEBSITE_ROOT.parent / ".igproxy-site-previous"
+    os.chmod(stage, 0o755)
+    for root, dirs, files in os.walk(stage):
+        for dirname in dirs:
+            os.chmod(Path(root) / dirname, 0o755)
+        for filename in files:
+            os.chmod(Path(root) / filename, 0o644)
+    if previous.exists():
+        shutil.rmtree(previous)
+    if WEBSITE_ROOT.exists():
+        WEBSITE_ROOT.replace(previous)
+    stage.replace(WEBSITE_ROOT)
+    config = load_json(GOTELEGRAM_CONFIG, {}) or {}
+    config["site_preset"] = preset
+    config["site_key"] = key_name
+    config["template_id"] = f"igproxy-{preset}"
+    config["updated_at"] = utc_now()
+    save_json(GOTELEGRAM_CONFIG, config)
+    return site_settings_payload()
+
+
+def apply_site_preset(preset: str, key_name: str) -> dict[str, Any]:
+    if preset not in SITE_PRESETS:
+        raise ValueError("unknown site preset")
+    _, link = _enabled_site_key(key_name)
     source = SITE_PRESETS_DIR / preset
     if not (source / "index.html").is_file():
         raise FileNotFoundError("site preset is not installed")
-    link = proxy_link(str(record["secret"]))
     WEBSITE_ROOT.parent.mkdir(parents=True, exist_ok=True)
     stage = Path(tempfile.mkdtemp(prefix=".igproxy-site-", dir=str(WEBSITE_ROOT.parent)))
     previous = WEBSITE_ROOT.parent / ".igproxy-site-previous"
     try:
         shutil.copytree(source, stage, dirs_exist_ok=True)
-        index = stage / "index.html"
-        rendered = index.read_text(encoding="utf-8").replace("__PROXY_LINK__", link)
-        index.write_text(rendered, encoding="utf-8")
-        os.chmod(stage, 0o755)
-        for root, dirs, files in os.walk(stage):
-            for dirname in dirs:
-                os.chmod(Path(root) / dirname, 0o755)
-            for filename in files:
-                os.chmod(Path(root) / filename, 0o644)
-        if previous.exists():
-            shutil.rmtree(previous)
-        if WEBSITE_ROOT.exists():
-            WEBSITE_ROOT.replace(previous)
-        stage.replace(WEBSITE_ROOT)
-        config = load_json(GOTELEGRAM_CONFIG, {}) or {}
-        config["site_preset"] = preset
-        config["site_key"] = key_name
-        config["template_id"] = f"igproxy-{preset}"
-        config["updated_at"] = utc_now()
-        save_json(GOTELEGRAM_CONFIG, config)
+        for page in stage.rglob("*.html"):
+            rendered = page.read_text(encoding="utf-8").replace("__PROXY_LINK__", link)
+            page.write_text(rendered, encoding="utf-8")
+        return _publish_site_stage(stage, preset, key_name)
     except Exception:
         if not WEBSITE_ROOT.exists() and previous.exists():
             previous.replace(WEBSITE_ROOT)
@@ -286,7 +302,35 @@ def apply_site_preset(preset: str, key_name: str) -> dict[str, Any]:
     finally:
         if stage.exists():
             shutil.rmtree(stage, ignore_errors=True)
-    return site_settings_payload()
+
+
+def apply_custom_site(html_source: str, key_name: str) -> dict[str, Any]:
+    """Publish a single static HTML page from the local admin."""
+    source = str(html_source or "")
+    encoded = source.encode("utf-8")
+    if not 80 <= len(encoded) <= 512 * 1024:
+        raise ValueError("HTML must be between 80 bytes and 512 KB")
+    lowered = source.lower()
+    if "<html" not in lowered or "</html>" not in lowered:
+        raise ValueError("upload a complete HTML document")
+    if "__PROXY_LINK__" not in source:
+        raise ValueError("HTML must contain __PROXY_LINK__")
+    if "<?php" in lowered or "<!--#include" in lowered or "<!--#exec" in lowered:
+        raise ValueError("server-side code is not allowed")
+    _, link = _enabled_site_key(key_name)
+    WEBSITE_ROOT.parent.mkdir(parents=True, exist_ok=True)
+    stage = Path(tempfile.mkdtemp(prefix=".igproxy-site-", dir=str(WEBSITE_ROOT.parent)))
+    previous = WEBSITE_ROOT.parent / ".igproxy-site-previous"
+    try:
+        (stage / "index.html").write_text(source.replace("__PROXY_LINK__", link), encoding="utf-8")
+        return _publish_site_stage(stage, "custom", key_name)
+    except Exception:
+        if not WEBSITE_ROOT.exists() and previous.exists():
+            previous.replace(WEBSITE_ROOT)
+        raise
+    finally:
+        if stage.exists():
+            shutil.rmtree(stage, ignore_errors=True)
 
 
 def write_language(lang: str) -> dict[str, Any]:
@@ -843,13 +887,13 @@ def proxy_link(secret: str) -> str:
 
     if mode == "pro" and domain:
         host_hex = domain.encode().hex()
-        return f"tg://proxy?server={domain}&port={port}&secret=ee{secret}{host_hex}"
+        return f"https://t.me/proxy?server={domain}&port={port}&secret=ee{secret}{host_hex}"
 
     server = public_ip()
     if mask_host:
         host_hex = mask_host.encode().hex()
-        return f"tg://proxy?server={server}&port={port}&secret=ee{secret}{host_hex}"
-    return f"tg://proxy?server={server}&port={port}&secret={secret}"
+        return f"https://t.me/proxy?server={server}&port={port}&secret=ee{secret}{host_hex}"
+    return f"https://t.me/proxy?server={server}&port={port}&secret={secret}"
 
 
 def telemt_api(path: str) -> Any:
@@ -911,8 +955,16 @@ def load_stats_history(limit: int | None = 240) -> list[dict[str, int]]:
     for row in rows:
         item = dict(row)
         if previous:
-            item["proxy_delta"] = max(0, row["proxy_bytes"] - previous["proxy_bytes"])
-            item["site_delta"] = max(0, row["site_bytes"] - previous["site_bytes"])
+            item["proxy_delta"] = (
+                row["proxy_bytes"] - previous["proxy_bytes"]
+                if row["proxy_bytes"] >= previous["proxy_bytes"]
+                else row["proxy_bytes"]
+            )
+            item["site_delta"] = (
+                row["site_bytes"] - previous["site_bytes"]
+                if row["site_bytes"] >= previous["site_bytes"]
+                else row["site_bytes"]
+            )
         else:
             item["proxy_delta"] = 0
             item["site_delta"] = 0
@@ -959,7 +1011,14 @@ def load_user_stats_history(name: str | None = None, limit: int | None = 240) ->
     for row in rows:
         item = dict(row)
         previous = previous_by_user.get(row["user"])
-        item["total_delta"] = max(0, row["total_octets"] - previous["total_octets"]) if previous else 0
+        if previous:
+            item["total_delta"] = (
+                row["total_octets"] - previous["total_octets"]
+                if row["total_octets"] >= previous["total_octets"]
+                else row["total_octets"]
+            )
+        else:
+            item["total_delta"] = 0
         enriched.append(item)
         previous_by_user[row["user"]] = row
     if limit and name is None:
@@ -1047,7 +1106,9 @@ def history_limit_for_range(range_key: str) -> int:
     return {
         "15m": 180,
         "1h": 240,
+        "6h": 600,
         "24h": 1800,
+        "7d": 11000,
         "month": 50000,
     }.get(range_key, 240)
 
@@ -1601,6 +1662,19 @@ class AdminHandler(BaseHTTPRequestHandler):
                 self.send_error_json(400, "unsupported service")
                 return
             self.send_json({"ok": True, "data": payload})
+        elif path == "/api/site/custom":
+            try:
+                payload = apply_custom_site(
+                    str(body.get("html") or ""),
+                    str(body.get("key") or "").strip(),
+                )
+            except ValueError as exc:
+                self.send_error_json(400, str(exc))
+                return
+            except Exception as exc:
+                self.send_error_json(500, str(exc))
+                return
+            self.send_json({"ok": True, "data": payload})
         else:
             self.send_error_json(404, "not found")
 
@@ -1862,6 +1936,17 @@ class AdminHandler(BaseHTTPRequestHandler):
 def main() -> None:
     if not STATIC_DIR.exists():
         raise SystemExit(f"static dir not found: {STATIC_DIR}")
+    if not (WEBSITE_ROOT / "index.html").exists():
+        records = read_user_records()
+        default_key = "main" if records.get("main", {}).get("enabled") else next(
+            (name for name, record in records.items() if record.get("enabled")),
+            "",
+        )
+        if default_key and (SITE_PRESETS_DIR / "random-gallery" / "index.html").exists():
+            try:
+                apply_site_preset("random-gallery", default_key)
+            except Exception as exc:
+                print(f"IGProxy default site was not published: {exc}")
     httpd = ThreadingHTTPServer((HOST, PORT), AdminHandler)
     print(f"IGProxy admin listening on http://{HOST}:{PORT}")
     httpd.serve_forever()
