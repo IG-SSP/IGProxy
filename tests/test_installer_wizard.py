@@ -114,6 +114,7 @@ installer_preflight_collect() {
   INSTALLER_PF_METRICS=свободен
   INSTALLER_PF_API=свободен
   INSTALLER_PF_FIREWALL='не обнаружен'
+  INSTALLER_PF_SELINUX='не установлен'
   INSTALLER_PF_EXISTING=нет
 }
 installer_preflight_json
@@ -190,6 +191,18 @@ installer_preflight_json
         self.assertIn("--dport \"$site_port\"", stats)
         self.assertIn("gotelegram-proxy", stats)
         self.assertIn("gotelegram-site", stats)
+
+    def test_selinux_port_change_is_transactional(self):
+        wizard = WIZARD.read_text(encoding="utf-8")
+        install = INSTALL.read_text(encoding="utf-8")
+        self.assertIn("installer_prepare_selinux_http_port", wizard)
+        self.assertIn("semanage port -a -t http_port_t -p tcp", wizard)
+        self.assertIn("selinux-http-ports.manifest", wizard)
+        self.assertIn("semanage port -d -t http_port_t -p tcp", wizard)
+        self.assertIn(
+            'installer_prepare_selinux_http_port "$nginx_internal_port"',
+            install,
+        )
 
 
 if __name__ == "__main__":

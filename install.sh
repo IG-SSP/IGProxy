@@ -63,7 +63,7 @@ show_main_menu() {
     # ── Header (no right border — ANSI breaks alignment) ──
     echo ""
     echo -e "  ${BOLD}${CYAN}━${line}━${NC}"
-    echo -e "  ${BOLD}${WHITE} goTelegram Pro v${GOTELEGRAM_VERSION}${NC}  ${DIM}— $(t dashboard_title)${NC}"
+    echo -e "  ${BOLD}${WHITE} goTelegram v${GOTELEGRAM_VERSION}${NC}  ${DIM}— $(t dashboard_title)${NC}"
     echo -e "  ${BOLD}${CYAN}━${line}━${NC}"
 
     # ── Service health ──
@@ -277,7 +277,10 @@ snapshot_preupgrade_state() {
 
     [ -f "$GOTELEGRAM_CONFIG" ] && mkdir -p "$tmp/opt/gotelegram" && cp "$GOTELEGRAM_CONFIG" "$tmp/opt/gotelegram/config.json" 2>/dev/null
     [ -f "$TELEMT_CONFIG" ] && mkdir -p "$tmp/etc/telemt" && cp "$TELEMT_CONFIG" "$tmp/etc/telemt/config.toml" 2>/dev/null
-    [ -f "$NGINX_SITE_CONF" ] && mkdir -p "$tmp/etc/nginx/sites-available" && cp "$NGINX_SITE_CONF" "$tmp/etc/nginx/sites-available/gotelegram" 2>/dev/null
+    if [ -f "$NGINX_SITE_CONF" ]; then
+        mkdir -p "$tmp$(dirname "$NGINX_SITE_CONF")"
+        cp "$NGINX_SITE_CONF" "$tmp$NGINX_SITE_CONF" 2>/dev/null
+    fi
     [ -d "$WEBSITE_ROOT" ] && mkdir -p "$tmp/var/www/gotelegram-site" && cp -a "$WEBSITE_ROOT/." "$tmp/var/www/gotelegram-site/" 2>/dev/null
     [ -f "$BOT_DIR/.env" ] && mkdir -p "$tmp/opt/gotelegram-bot" && cp "$BOT_DIR/.env" "$tmp/opt/gotelegram-bot/.env" 2>/dev/null
 
@@ -564,7 +567,7 @@ auto_migrate_legacy_state() {
 
     [ -f "$TELEMT_CONFIG" ] || [ -f "$GOTELEGRAM_CONFIG" ] || [ -d "$WEBSITE_ROOT" ] || return 0
 
-    log_step "Миграция состояния goTelegram Pro"
+    log_step "Миграция состояния goTelegram"
     snapshot_preupgrade_state
 
     local mode port secret mask_host domain mask_port tpl_id tpl_source users_block tls_emulation changed=0 users_block_needs_write=0
@@ -651,7 +654,7 @@ auto_migrate_legacy_state() {
     if [ -f "$TELEMT_CONFIG" ]; then
         if ! grep -q '\[server.api\]' "$TELEMT_CONFIG" 2>/dev/null || \
            ! grep -q 'metrics_listen' "$TELEMT_CONFIG" 2>/dev/null || \
-           ! grep -q "goTelegram Pro v${GOTELEGRAM_VERSION}" "$TELEMT_CONFIG" 2>/dev/null || \
+           ! grep -q "goTelegram v${GOTELEGRAM_VERSION}" "$TELEMT_CONFIG" 2>/dev/null || \
            [ "${REANIM_PRESET_CHANGED:-0}" = "1" ]; then
             generate_telemt_toml "$secret" "$port" "$mode" "$mask_host" "$mask_port" "$TELEMT_CONFIG" >&2
             replace_telemt_users_block "$users_block" "$TELEMT_CONFIG"
@@ -932,6 +935,10 @@ install_pro_mode() {
     # Установка
     ensure_deps || {
         installer_transaction_rollback "не удалось установить зависимости"
+        return
+    }
+    installer_prepare_selinux_http_port "$nginx_internal_port" || {
+        installer_transaction_rollback "SELinux не разрешил внутренний порт nginx"
         return
     }
     choose_telemt_version
@@ -1262,7 +1269,7 @@ install_admin_web() {
     python_bin=$(command -v python3)
     cat > "/etc/systemd/system/${ADMIN_WEB_SERVICE}.service" << SVCEOF
 [Unit]
-Description=goTelegram Pro v${GOTELEGRAM_VERSION} Local Web Admin
+Description=goTelegram v${GOTELEGRAM_VERSION} Local Web Admin
 After=network.target
 
 [Service]
@@ -1599,7 +1606,7 @@ bot_install() {
     # Systemd
     cat > "/etc/systemd/system/${BOT_SERVICE}.service" << SVCEOF
 [Unit]
-Description=goTelegram Pro v${GOTELEGRAM_VERSION} Telegram Bot
+Description=goTelegram v${GOTELEGRAM_VERSION} Telegram Bot
 After=network.target
 
 [Service]

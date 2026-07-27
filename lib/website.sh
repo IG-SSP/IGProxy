@@ -30,13 +30,21 @@ install_certbot() {
     esac
 }
 
+# ── Активация nginx-конфига с учётом layout дистрибутива ────────────────────
+activate_nginx_site() {
+    mkdir -p "$(dirname "$NGINX_SITE_CONF")" "$(dirname "$NGINX_SITE_LINK")"
+    if [ "$NGINX_SITE_CONF" != "$NGINX_SITE_LINK" ]; then
+        ln -sfn "$NGINX_SITE_CONF" "$NGINX_SITE_LINK"
+    fi
+}
+
 # ── Генерация nginx конфига ──────────────────────────────────────────────────
 generate_nginx_config() {
     local domain="$1"
     local proxy_port="${2:-443}"
     local use_ssl="${3:-true}"
 
-    mkdir -p /etc/nginx/sites-available /etc/nginx/sites-enabled
+    mkdir -p "$(dirname "$NGINX_SITE_CONF")"
 
     cat > "$NGINX_SITE_CONF" << 'EONGINX'
 # GoTelegram v2.5.0 — nginx config
@@ -116,7 +124,7 @@ EONGINX
     sed -i "s|SSL_PORT_PLACEHOLDER|${proxy_port}|g" "$NGINX_SITE_CONF"
 
     # Активируем отдельный virtual host, не трогая уже существующие сайты.
-    ln -sf "$NGINX_SITE_CONF" "$NGINX_SITE_LINK"
+    activate_nginx_site
 
     log_success "nginx конфиг создан для $domain"
 }
@@ -125,6 +133,7 @@ EONGINX
 generate_nginx_temp_config() {
     local domain="$1"
 
+    mkdir -p "$(dirname "$NGINX_SITE_CONF")"
     cat > "$NGINX_SITE_CONF" << EONGINX_TEMP
 # GoTelegram — временный конфиг (до получения SSL)
 server {
@@ -146,7 +155,7 @@ server {
 }
 EONGINX_TEMP
 
-    ln -sf "$NGINX_SITE_CONF" "$NGINX_SITE_LINK"
+    activate_nginx_site
     mkdir -p /var/www/certbot
 }
 

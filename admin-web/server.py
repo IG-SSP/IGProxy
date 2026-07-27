@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-goTelegram Pro local web admin.
+goTelegram local web admin.
 
 The service is intentionally bound to 127.0.0.1:1984. Operators reach it
 through an SSH tunnel; it must never be exposed directly on the public network.
@@ -1731,7 +1731,7 @@ def main() -> None:
     if not STATIC_DIR.exists():
         raise SystemExit(f"static dir not found: {STATIC_DIR}")
     httpd = ThreadingHTTPServer((HOST, PORT), AdminHandler)
-    print(f"goTelegram Pro admin listening on http://{HOST}:{PORT}")
+    print(f"goTelegram admin listening on http://{HOST}:{PORT}")
     httpd.serve_forever()
 
 

@@ -444,9 +444,11 @@ restore_backup() {
 
     # Восстанавливаем nginx конфиг
     if [ -f "$backup_dir/nginx.conf" ]; then
-        mkdir -p /etc/nginx/sites-available /etc/nginx/sites-enabled
+        mkdir -p "$(dirname "$NGINX_SITE_CONF")" "$(dirname "$NGINX_SITE_LINK")"
         cp "$backup_dir/nginx.conf" "$NGINX_SITE_CONF"
-        ln -sf "$NGINX_SITE_CONF" "$NGINX_SITE_LINK"
+        if [ "$NGINX_SITE_CONF" != "$NGINX_SITE_LINK" ]; then
+            ln -sfn "$NGINX_SITE_CONF" "$NGINX_SITE_LINK"
+        fi
         log_success "$(_t_or backup_restored_nginx 'nginx конфиг восстановлен')"
     fi
 
@@ -472,7 +474,8 @@ restore_backup() {
     if [ -d "$backup_dir/site" ]; then
         mkdir -p "$WEBSITE_ROOT"
         cp -a "$backup_dir/site/." "$WEBSITE_ROOT/"
-        chown -R www-data:www-data "$WEBSITE_ROOT" 2>/dev/null
+        chown -R www-data:www-data "$WEBSITE_ROOT" 2>/dev/null || \
+            chown -R nginx:nginx "$WEBSITE_ROOT" 2>/dev/null || true
         log_success "$(_t_or backup_restored_site 'Шаблон сайта восстановлен')"
     fi
 

@@ -139,7 +139,7 @@ generate_telemt_toml() {
     if [ "${timing_ceiling:-0}" -le 0 ] 2>/dev/null; then timing_enabled="false"; timing_floor=0; timing_ceiling=0; fi
 
     cat > "$output" << EOTOML
-# goTelegram Pro v${GOTELEGRAM_VERSION} — telemt v3 configuration
+# goTelegram v${GOTELEGRAM_VERSION} — telemt v3 configuration
 # Сгенерировано: $(date -Iseconds)
 # Режим: ${mask_mode}
 

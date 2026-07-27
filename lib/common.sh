@@ -3,8 +3,8 @@
 # Colors, logging, spinner, system helpers, v1 compat, i18n-aware
 
 # ── Version ───────────────────────────────────────────────────────────────────
-GOTELEGRAM_VERSION="2.7.24"
-GOTELEGRAM_NAME="goTelegram Pro"
+GOTELEGRAM_VERSION="2.7.25"
+GOTELEGRAM_NAME="goTelegram"
 
 # ── Пути ──────────────────────────────────────────────────────────────────────
 GOTELEGRAM_DIR="/opt/gotelegram"
@@ -13,8 +13,27 @@ TELEMT_CONFIG="/etc/telemt/config.toml"
 TELEMT_BIN="/usr/local/bin/telemt"
 TELEMT_PINNED_VERSION="3.4.18"   # протестированная стабильная версия ядра (дефолт)
 TELEMT_SERVICE="telemt"
-NGINX_SITE_CONF="/etc/nginx/sites-available/gotelegram"
-NGINX_SITE_LINK="/etc/nginx/sites-enabled/gotelegram"
+
+# Debian включает отдельные virtual hosts через sites-enabled, а стандартные
+# пакеты nginx в RHEL-семействе читают /etc/nginx/conf.d/*.conf напрямую.
+# Override нужен для изолированных тестов и нестандартных сборок nginx.
+GOTELEGRAM_OS_ID="${GOTELEGRAM_OS_ID_OVERRIDE:-}"
+if [ -z "$GOTELEGRAM_OS_ID" ] && [ -r /etc/os-release ]; then
+    GOTELEGRAM_OS_ID=$(
+        . /etc/os-release
+        printf '%s' "${ID:-}"
+    )
+fi
+case "$GOTELEGRAM_OS_ID" in
+    rhel|centos|rocky|almalinux|fedora)
+        NGINX_SITE_CONF="${NGINX_SITE_CONF:-/etc/nginx/conf.d/gotelegram.conf}"
+        NGINX_SITE_LINK="${NGINX_SITE_LINK:-$NGINX_SITE_CONF}"
+        ;;
+    *)
+        NGINX_SITE_CONF="${NGINX_SITE_CONF:-/etc/nginx/sites-available/gotelegram}"
+        NGINX_SITE_LINK="${NGINX_SITE_LINK:-/etc/nginx/sites-enabled/gotelegram}"
+        ;;
+esac
 WEBSITE_ROOT="/var/www/gotelegram-site"
 BACKUP_DIR="$GOTELEGRAM_DIR/backups"
 LOG_FILE="/var/log/gotelegram.log"
@@ -128,7 +147,7 @@ show_banner() {
         echo -e "  ${DIM}$(t banner_subtitle)${NC}"
         echo -e "  ${DIM}$(t banner_features)${NC}"
     else
-        echo -e "  ${BOLD}${WHITE}🚀 goTelegram Pro v${GOTELEGRAM_VERSION}${NC}"
+        echo -e "  ${BOLD}${WHITE}🚀 goTelegram v${GOTELEGRAM_VERSION}${NC}"
         echo -e "  ${DIM}MTProxy powered by telemt (Rust + Tokio)${NC}"
         echo -e "  ${DIM}Anti-DPI • Fake TLS • TCP Splice • JA3/JA4${NC}"
     fi

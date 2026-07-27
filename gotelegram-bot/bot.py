@@ -3202,7 +3202,7 @@ def main() -> None:
     application.add_error_handler(error_handler)
 
     # Run the bot
-    logger.info(f"goTelegram Pro v{GOTELEGRAM_VERSION} bot starting...")
+    logger.info(f"goTelegram v{GOTELEGRAM_VERSION} bot starting...")
     application.run_polling(allowed_updates=Update.ALL_TYPES)
 
 

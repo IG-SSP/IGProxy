@@ -149,6 +149,74 @@ installer_firewall_label() {
     fi
 }
 
+installer_selinux_label() {
+    if ! command -v getenforce >/dev/null 2>&1; then
+        printf 'не установлен'
+        return 0
+    fi
+    case "$(getenforce 2>/dev/null || true)" in
+        Enforcing) printf 'Enforcing — порт сайта будет разрешён точечным правилом' ;;
+        Permissive) printf 'Permissive' ;;
+        Disabled) printf 'отключён' ;;
+        *) printf 'состояние не определено' ;;
+    esac
+}
+
+installer_selinux_type_allows_port() {
+    local type_name="$1" port="$2"
+    command -v semanage >/dev/null 2>&1 || return 1
+    [[ "$port" =~ ^[0-9]+$ ]] || return 1
+    LC_ALL=C semanage port -l 2>/dev/null | awk -v wanted_type="$type_name" -v wanted_port="$port" '
+        $1 == wanted_type && $2 == "tcp" {
+            for (i = 3; i <= NF; i++) {
+                value = $i
+                gsub(/,/, "", value)
+                split(value, bounds, "-")
+                if ((bounds[2] == "" && bounds[1] == wanted_port) ||
+                    (bounds[2] != "" && wanted_port >= bounds[1] && wanted_port <= bounds[2])) {
+                    found = 1
+                }
+            }
+        }
+        END { exit(found ? 0 : 1) }
+    '
+}
+
+installer_prepare_selinux_http_port() {
+    local port="$1" pkg_mgr
+    [[ "$port" =~ ^[0-9]+$ ]] && [ "$port" -ge 1 ] && [ "$port" -le 65535 ] || {
+        log_error "Некорректный внутренний порт для SELinux: $port"
+        return 1
+    }
+    command -v getenforce >/dev/null 2>&1 || return 0
+    [ "$(getenforce 2>/dev/null || true)" = "Enforcing" ] || return 0
+
+    if ! command -v semanage >/dev/null 2>&1; then
+        pkg_mgr=$(get_pkg_manager)
+        log_info "Установка утилиты SELinux для точечного разрешения TCP/${port}..."
+        case "$pkg_mgr" in
+            dnf) dnf install -y -q policycoreutils-python-utils ;;
+            yum) yum install -y -q policycoreutils-python-utils ;;
+            *)
+                log_error "SELinux работает в Enforcing, но semanage отсутствует."
+                return 1
+                ;;
+        esac
+    fi
+    command -v semanage >/dev/null 2>&1 || {
+        log_error "Не удалось установить semanage; nginx не получит доступ к TCP/${port}."
+        return 1
+    }
+    installer_selinux_type_allows_port http_port_t "$port" && return 0
+
+    if ! semanage port -a -t http_port_t -p tcp "$port" >/dev/null 2>&1; then
+        log_error "SELinux не разрешил nginx слушать TCP/${port}; возможно, порт закреплён за другим типом."
+        return 1
+    fi
+    printf '%s\n' "$port" >> "$INSTALLER_TX_DIR/selinux-http-ports.manifest"
+    log_success "SELinux: TCP/${port} разрешён только для http_port_t."
+}
+
 installer_preflight_collect() {
     INSTALLER_PREFLIGHT_FATAL=0
     INSTALLER_PF_OS=$(installer_os_label)
@@ -162,6 +230,7 @@ installer_preflight_collect() {
     INSTALLER_PF_PORT443=$(installer_port_owner_label 443)
     INSTALLER_PF_RECOMMENDED_PORT=$(installer_pick_recommended_port 2>/dev/null || true)
     INSTALLER_PF_FIREWALL=$(installer_firewall_label)
+    INSTALLER_PF_SELINUX=$(installer_selinux_label)
     INSTALLER_PF_ADMIN=$(installer_reserved_port_status 1984 gotelegram-admin) || INSTALLER_PREFLIGHT_FATAL=$((INSTALLER_PREFLIGHT_FATAL + 1))
     INSTALLER_PF_METRICS=$(installer_reserved_port_status 9090 telemt) || INSTALLER_PREFLIGHT_FATAL=$((INSTALLER_PREFLIGHT_FATAL + 1))
     INSTALLER_PF_API=$(installer_reserved_port_status 9091 telemt) || INSTALLER_PREFLIGHT_FATAL=$((INSTALLER_PREFLIGHT_FATAL + 1))
@@ -230,6 +299,10 @@ installer_preflight_show() {
         installer_status_line error "Порт для прокси" "443, 8443, 9443 и 2053 заняты"
     fi
     installer_status_line ok "Firewall" "$INSTALLER_PF_FIREWALL"
+    case "$INSTALLER_PF_SELINUX" in
+        Enforcing*) installer_status_line warn "SELinux" "$INSTALLER_PF_SELINUX" ;;
+        *) installer_status_line ok "SELinux" "$INSTALLER_PF_SELINUX" ;;
+    esac
     case "$INSTALLER_PF_ADMIN" in КОНФЛИКТ*) installer_status_line error "Админка 127.0.0.1:1984" "$INSTALLER_PF_ADMIN" ;; *) installer_status_line ok "Админка 127.0.0.1:1984" "$INSTALLER_PF_ADMIN" ;; esac
     case "$INSTALLER_PF_METRICS" in КОНФЛИКТ*) installer_status_line error "Метрики 127.0.0.1:9090" "$INSTALLER_PF_METRICS" ;; *) installer_status_line ok "Метрики 127.0.0.1:9090" "$INSTALLER_PF_METRICS" ;; esac
     case "$INSTALLER_PF_API" in КОНФЛИКТ*) installer_status_line error "API 127.0.0.1:9091" "$INSTALLER_PF_API" ;; *) installer_status_line ok "API 127.0.0.1:9091" "$INSTALLER_PF_API" ;; esac
@@ -271,6 +344,7 @@ installer_preflight_json() {
     printf '"metrics_port":"%s",' "$(installer_json_escape "$INSTALLER_PF_METRICS")"
     printf '"api_port":"%s",' "$(installer_json_escape "$INSTALLER_PF_API")"
     printf '"firewall":"%s",' "$(installer_json_escape "$INSTALLER_PF_FIREWALL")"
+    printf '"selinux":"%s",' "$(installer_json_escape "$INSTALLER_PF_SELINUX")"
     printf '"existing_install":"%s"' "$(installer_json_escape "$INSTALLER_PF_EXISTING")"
     printf '}\n'
     [ "$INSTALLER_PREFLIGHT_FATAL" -eq 0 ]
@@ -430,6 +504,7 @@ installer_show_apply_plan() {
         echo "  • Настроить домен ${domain}, сертификат Let's Encrypt и сайт."
         echo "  • Добавить отдельный nginx server_name на TCP/80."
         echo "  • Сайт маскировки слушает только 127.0.0.1:${internal_port}."
+        echo "  • При SELinux Enforcing точечно разрешить nginx TCP/${internal_port}."
     else
         echo "  • nginx, сайты и сертификаты не изменяются."
     fi
@@ -488,6 +563,7 @@ installer_transaction_begin() {
     printf 'profile=%s\nstarted_at=%s\n' "$profile" "$(date -Iseconds)" > "$INSTALLER_TX_DIR/meta"
     : > "$INSTALLER_TX_DIR/files.manifest"
     : > "$INSTALLER_TX_DIR/services.manifest"
+    : > "$INSTALLER_TX_DIR/selinux-http-ports.manifest"
 
     installer_tx_copy_if_exists "${TELEMT_CONFIG:-/etc/telemt/config.toml}"
     installer_tx_copy_if_exists "${GOTELEGRAM_CONFIG:-/opt/gotelegram/config.json}"
@@ -606,6 +682,13 @@ installer_transaction_rollback() {
     log_warning "Откат изменений: $reason"
     systemctl stop telemt nginx >/dev/null 2>&1 || true
     installer_transaction_restore_files || restore_ok=0
+    if [ -f "$INSTALLER_TX_DIR/selinux-http-ports.manifest" ] && command -v semanage >/dev/null 2>&1; then
+        local selinux_port
+        while IFS= read -r selinux_port; do
+            [[ "$selinux_port" =~ ^[0-9]+$ ]] || continue
+            semanage port -d -t http_port_t -p tcp "$selinux_port" >/dev/null 2>&1 || restore_ok=0
+        done < "$INSTALLER_TX_DIR/selinux-http-ports.manifest"
+    fi
     installer_transaction_restore_services
     printf 'rolled_back_at=%s\nreason=%s\n' "$(date -Iseconds)" "$reason" >> "$INSTALLER_TX_DIR/meta"
     chmod -R go-rwx "$INSTALLER_TX_DIR" 2>/dev/null || true
