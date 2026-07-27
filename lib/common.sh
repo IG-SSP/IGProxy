@@ -94,7 +94,11 @@ progress_bar() {
 # ── Выполнение с индикатором ─────────────────────────────────────────────────
 run_with_spinner() {
     local label="$1"; shift
-    local err_file="/tmp/.gotelegram_spinner_err_$$"
+    local err_file
+    err_file=$(mktemp /tmp/gotelegram-spinner.XXXXXX) || {
+        log_error "Не удалось создать временный файл для операции: $label"
+        return 1
+    }
     spinner_start "$label"
     "$@" >/dev/null 2>"$err_file"
     local rc=$?
@@ -109,7 +113,7 @@ run_with_spinner() {
             log_dim "  $(head -3 "$err_file")"
         fi
     fi
-    rm -f "$err_file"
+    rm -f -- "$err_file"
     return $rc
 }
 
@@ -288,14 +292,15 @@ apt_install() {
     apt_lock_wait || return 1
     export DEBIAN_FRONTEND=noninteractive
     local opts="-o DPkg::Lock::Timeout=120"
-    local err_file; err_file=$(mktemp 2>/dev/null || echo /tmp/apt_err.$$)
+    local err_file
+    err_file=$(mktemp /tmp/gotelegram-apt.XXXXXX) || return 1
     if ! apt-get $opts install -y -qq "$@" 2>"$err_file"; then
         log_error "apt-get install failed: $*"
         [ -s "$err_file" ] && tail -n 5 "$err_file" | sed 's/^/    /' >&2
-        rm -f "$err_file"
+        rm -f -- "$err_file"
         return 1
     fi
-    rm -f "$err_file"
+    rm -f -- "$err_file"
     return 0
 }
 

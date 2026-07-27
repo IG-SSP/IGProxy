@@ -127,11 +127,13 @@ installer_reserved_port_status() {
         printf 'свободен'
         return 0
     fi
-    if command -v systemctl >/dev/null 2>&1 && systemctl is-active --quiet "$service" 2>/dev/null; then
+    if command -v systemctl >/dev/null 2>&1 &&
+       systemctl is-active --quiet "$service" 2>/dev/null &&
+       printf '%s' "$listener" | grep -Eq "(^|[[:space:]])(127\\.0\\.0\\.1|\\[?::1\\]?):${port}([[:space:]]|$)"; then
         printf 'занят нашей службой %s' "$service"
         return 0
     fi
-    printf 'КОНФЛИКТ: %s' "$listener"
+    printf 'КОНФЛИКТ или публичная привязка: %s' "$listener"
     return 1
 }
 
@@ -228,9 +230,9 @@ installer_preflight_show() {
         installer_status_line error "Порт для прокси" "443, 8443, 9443 и 2053 заняты"
     fi
     installer_status_line ok "Firewall" "$INSTALLER_PF_FIREWALL"
-    case "$INSTALLER_PF_ADMIN" in КОНФЛИКТ:*) installer_status_line error "Админка 127.0.0.1:1984" "$INSTALLER_PF_ADMIN" ;; *) installer_status_line ok "Админка 127.0.0.1:1984" "$INSTALLER_PF_ADMIN" ;; esac
-    case "$INSTALLER_PF_METRICS" in КОНФЛИКТ:*) installer_status_line error "Метрики 127.0.0.1:9090" "$INSTALLER_PF_METRICS" ;; *) installer_status_line ok "Метрики 127.0.0.1:9090" "$INSTALLER_PF_METRICS" ;; esac
-    case "$INSTALLER_PF_API" in КОНФЛИКТ:*) installer_status_line error "API 127.0.0.1:9091" "$INSTALLER_PF_API" ;; *) installer_status_line ok "API 127.0.0.1:9091" "$INSTALLER_PF_API" ;; esac
+    case "$INSTALLER_PF_ADMIN" in КОНФЛИКТ*) installer_status_line error "Админка 127.0.0.1:1984" "$INSTALLER_PF_ADMIN" ;; *) installer_status_line ok "Админка 127.0.0.1:1984" "$INSTALLER_PF_ADMIN" ;; esac
+    case "$INSTALLER_PF_METRICS" in КОНФЛИКТ*) installer_status_line error "Метрики 127.0.0.1:9090" "$INSTALLER_PF_METRICS" ;; *) installer_status_line ok "Метрики 127.0.0.1:9090" "$INSTALLER_PF_METRICS" ;; esac
+    case "$INSTALLER_PF_API" in КОНФЛИКТ*) installer_status_line error "API 127.0.0.1:9091" "$INSTALLER_PF_API" ;; *) installer_status_line ok "API 127.0.0.1:9091" "$INSTALLER_PF_API" ;; esac
     installer_status_line ok "Существующая установка" "$INSTALLER_PF_EXISTING"
     echo -e "  ${DIM:-}$(printf '─%.0s' {1..64})${NC:-}"
 }
@@ -624,11 +626,19 @@ installer_verify_install() {
             return 1
         }
     fi
-    local admin_listener
+    local admin_listener reserved_port reserved_listener
     admin_listener=$(installer_port_listener 1984)
     if [ -n "$admin_listener" ] && printf '%s' "$admin_listener" | grep -Eq '(^|[[:space:]])(0\.0\.0\.0|\[::\]|\*):?1984'; then
         log_error "Админка обнаружена на публичном адресе:1984. Установка остановлена."
         return 1
     fi
+    for reserved_port in 9090 9091; do
+        reserved_listener=$(installer_port_listener "$reserved_port")
+        if [ -n "$reserved_listener" ] &&
+           ! printf '%s' "$reserved_listener" | grep -Eq "(^|[[:space:]])(127\\.0\\.0\\.1|\\[?::1\\]?):${reserved_port}([[:space:]]|$)"; then
+            log_error "Служебный порт $reserved_port доступен не только локально; установка остановлена."
+            return 1
+        fi
+    done
     return 0
 }

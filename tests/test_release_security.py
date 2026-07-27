@@ -57,6 +57,13 @@ class ReleaseSecurityTests(unittest.TestCase):
         self.assertIn("create_backup_from_password_file", source)
         self.assertIn("restore_backup_from_password_file", source)
 
+    def test_common_helpers_do_not_fall_back_to_predictable_root_tempfiles(self):
+        source = (ROOT / "lib" / "common.sh").read_text(encoding="utf-8")
+        self.assertIn("mktemp /tmp/gotelegram-spinner.XXXXXX", source)
+        self.assertIn("mktemp /tmp/gotelegram-apt.XXXXXX", source)
+        self.assertNotIn("spinner_err_$$", source)
+        self.assertNotIn("apt_err.$$", source)
+
     @unittest.skipUnless(shutil.which("bash") and shutil.which("tar"), "requires bash and tar")
     def test_backup_rejects_parent_directory_archive_path(self):
         with tempfile.TemporaryDirectory() as temp:

@@ -85,6 +85,17 @@ installer_pick_internal_port 8443
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(result.stdout.strip(), "9443")
 
+    def test_reserved_service_port_must_be_bound_to_loopback(self):
+        result = run_bash(
+            """
+systemctl() { return 0; }
+installer_port_listener() { printf 'LISTEN 0 4096 0.0.0.0:%s users:(("telemt",pid=1))' "$1"; }
+installer_reserved_port_status 9091 telemt
+"""
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("публичная привязка", result.stdout)
+
     def test_operator_installation_is_russian_only(self):
         install = INSTALL.read_text(encoding="utf-8")
         self.assertIn('load_language "ru"', install)
@@ -128,6 +139,8 @@ installer_pick_internal_port 8443
         website = (ROOT / "lib" / "website.sh").read_text(encoding="utf-8")
         self.assertNotIn("crontab -l", website)
         self.assertIn("gotelegram-certbot-renew.timer", website)
+        self.assertIn("Шаблон содержит ссылки или специальные файлы", website)
+        self.assertIn(".gotelegram-site.XXXXXX", website)
 
     def test_stats_follow_configured_ports_instead_of_hardcoded_443(self):
         stats = (ROOT / "lib" / "stats.sh").read_text(encoding="utf-8")

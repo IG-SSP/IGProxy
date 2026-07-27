@@ -4,7 +4,7 @@
 # + custom git URL templates (user-supplied public repos)
 
 CATALOG_FILE="$(dirname "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")")/templates_catalog.json"
-TEMPLATES_CACHE="/tmp/gotelegram_templates"
+TEMPLATES_CACHE="${TEMPLATES_CACHE:-/var/cache/gotelegram/templates}"
 
 # Custom git template limits
 CUSTOM_GIT_MAX_SIZE_MB=100
@@ -215,15 +215,22 @@ download_template() {
     name=$(echo "$info" | jq -r '.name')
 
     local clone_dir="$output_dir/${tpl_id}"
-    rm -rf "$clone_dir"
-    mkdir -p "$clone_dir"
+    [[ "$tpl_id" =~ ^[A-Za-z0-9._-]+$ ]] || {
+        log_error "Некорректный идентификатор шаблона"
+        return 1
+    }
+    mkdir -p -m 700 "$output_dir"
+    chmod 700 "$output_dir" 2>/dev/null || true
+    rm -rf -- "$clone_dir"
+    mkdir -p -m 700 "$clone_dir"
 
     log_info "$(tf templates_downloading "$name")"
 
     # HTML5 UP — one repo with folders
     if [ "$source" = "html5up" ]; then
-        local tmp_clone="/tmp/html5up_clone_$$"
-        rm -rf "$tmp_clone"
+        local work_dir tmp_clone
+        work_dir=$(mktemp -d /tmp/gotelegram-template.XXXXXX) || return 1
+        tmp_clone="$work_dir/repo"
 
         # Sparse checkout
         git clone --depth 1 --filter=blob:none --sparse "$repo_url" "$tmp_clone" 2>/dev/null
@@ -239,12 +246,13 @@ download_template() {
             fi
             cd - >/dev/null
         fi
-        rm -rf "$tmp_clone"
+        rm -rf -- "$work_dir"
 
     # learning-zone — one big repo
     elif [ "$source" = "learning-zone" ]; then
-        local tmp_clone="/tmp/lz_clone_$$"
-        rm -rf "$tmp_clone"
+        local work_dir tmp_clone
+        work_dir=$(mktemp -d /tmp/gotelegram-template.XXXXXX) || return 1
+        tmp_clone="$work_dir/repo"
 
         git clone --depth 1 --filter=blob:none --sparse "$repo_url" "$tmp_clone" 2>/dev/null
         if [ $? -ne 0 ]; then
@@ -258,12 +266,13 @@ download_template() {
             fi
             cd - >/dev/null
         fi
-        rm -rf "$tmp_clone"
+        rm -rf -- "$work_dir"
 
     # StartBootstrap — each template in its own repo
     elif [ "$source" = "startbootstrap" ]; then
-        local sb_tmp="/tmp/sb_clone_$$"
-        rm -rf "$sb_tmp"
+        local work_dir sb_tmp
+        work_dir=$(mktemp -d /tmp/gotelegram-template.XXXXXX) || return 1
+        sb_tmp="$work_dir/repo"
         git clone --depth 1 "$repo_url" "$sb_tmp" 2>/dev/null
         if [ -d "$sb_tmp" ]; then
             rm -rf "$sb_tmp/.git"
@@ -282,12 +291,13 @@ download_template() {
                 fi
             fi
         fi
-        rm -rf "$sb_tmp"
+        rm -rf -- "$work_dir"
 
     # ThemeWagon / ColorlibHQ — each template in its own repo
     elif [ "$source" = "themewagon" ] || [ "$source" = "colorlib" ]; then
-        local tw_tmp="/tmp/tw_clone_$$"
-        rm -rf "$tw_tmp"
+        local work_dir tw_tmp
+        work_dir=$(mktemp -d /tmp/gotelegram-template.XXXXXX) || return 1
+        tw_tmp="$work_dir/repo"
         git clone --depth 1 "$repo_url" "$tw_tmp" 2>/dev/null
         if [ -d "$tw_tmp" ]; then
             rm -rf "$tw_tmp/.git"
@@ -305,12 +315,13 @@ download_template() {
                 fi
             fi
         fi
-        rm -rf "$tw_tmp"
+        rm -rf -- "$work_dir"
 
     # dawidolko — one big repo with folders (similar to learning-zone)
     elif [ "$source" = "dawidolko" ]; then
-        local tmp_clone="/tmp/dw_clone_$$"
-        rm -rf "$tmp_clone"
+        local work_dir tmp_clone
+        work_dir=$(mktemp -d /tmp/gotelegram-template.XXXXXX) || return 1
+        tmp_clone="$work_dir/repo"
         git clone --depth 1 --filter=blob:none --sparse "$repo_url" "$tmp_clone" 2>/dev/null
         if [ $? -ne 0 ]; then
             git clone --depth 1 "$repo_url" "$tmp_clone" 2>/dev/null
@@ -322,7 +333,7 @@ download_template() {
             fi
             cd - >/dev/null
         fi
-        rm -rf "$tmp_clone"
+        rm -rf -- "$work_dir"
     fi
 
     # Check result
@@ -464,10 +475,15 @@ download_custom_git_template() {
     [ -z "$hash" ] && hash=$(date +%s)
     local tpl_id="custom_${hash}"
     local clone_dir="$output_dir/${tpl_id}"
-    local tmp_clone="/tmp/custom_git_clone_$$"
+    local work_dir tmp_clone error_file
+    work_dir=$(mktemp -d /tmp/gotelegram-template.XXXXXX) || return 1
+    tmp_clone="$work_dir/repo"
+    error_file="$work_dir/git-error.log"
 
-    rm -rf "$clone_dir" "$tmp_clone"
-    mkdir -p "$clone_dir"
+    mkdir -p -m 700 "$output_dir"
+    chmod 700 "$output_dir" 2>/dev/null || true
+    rm -rf -- "$clone_dir"
+    mkdir -p -m 700 "$clone_dir"
 
     log_info "$(t custom_git_cloning)"
 
@@ -478,22 +494,20 @@ download_custom_git_template() {
     git_args+=("$clean_url" "$tmp_clone")
 
     if command -v timeout &>/dev/null; then
-        timeout "$CUSTOM_GIT_CLONE_TIMEOUT" git "${git_args[@]}" 2>/tmp/custom_git_err_$$
+        timeout "$CUSTOM_GIT_CLONE_TIMEOUT" git "${git_args[@]}" 2>"$error_file"
         clone_status=$?
     else
-        git "${git_args[@]}" 2>/tmp/custom_git_err_$$
+        git "${git_args[@]}" 2>"$error_file"
         clone_status=$?
     fi
 
     if [ $clone_status -ne 0 ] || [ ! -d "$tmp_clone" ]; then
         local err_msg
-        err_msg=$(head -3 "/tmp/custom_git_err_$$" 2>/dev/null | tr '\n' ' ')
-        rm -f "/tmp/custom_git_err_$$"
-        rm -rf "$tmp_clone" "$clone_dir"
+        err_msg=$(head -3 "$error_file" 2>/dev/null | tr '\n' ' ')
+        rm -rf -- "$work_dir" "$clone_dir"
         log_error "$(tf custom_git_clone_failed "${err_msg:-$clone_status}")"
         return 1
     fi
-    rm -f "/tmp/custom_git_err_$$"
 
     # Drop .git before measuring size (we only care about payload)
     rm -rf "$tmp_clone/.git"
@@ -502,7 +516,7 @@ download_custom_git_template() {
     local size_mb
     size_mb=$(_clone_dir_size_mb "$tmp_clone")
     if [ -n "$size_mb" ] && [ "$size_mb" -gt "$CUSTOM_GIT_MAX_SIZE_MB" ]; then
-        rm -rf "$tmp_clone" "$clone_dir"
+        rm -rf -- "$work_dir" "$clone_dir"
         log_error "$(tf custom_git_too_big "${size_mb}MB")"
         return 1
     fi
@@ -531,7 +545,7 @@ download_custom_git_template() {
     fi
 
     if [ -z "$found_dir" ] || [ ! -f "$found_dir/index.html" ]; then
-        rm -rf "$tmp_clone" "$clone_dir"
+        rm -rf -- "$work_dir" "$clone_dir"
         log_error "$(t custom_git_no_index)"
         return 1
     fi
@@ -546,7 +560,7 @@ download_custom_git_template() {
     cp -r "$found_dir"/* "$clone_dir/" 2>/dev/null
     cp -r "$found_dir"/.[!.]* "$clone_dir/" 2>/dev/null
 
-    rm -rf "$tmp_clone"
+    rm -rf -- "$work_dir"
 
     if [ ! -f "$clone_dir/index.html" ]; then
         rm -rf "$clone_dir"

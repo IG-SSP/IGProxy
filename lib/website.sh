@@ -263,29 +263,66 @@ get_ssl_expiry() {
 deploy_template_to_nginx() {
     local template_dir="$1"
     local template_id="${2:-}"
-    local source_url=""
+    local source_url="" website_parent stage_dir old_site=""
 
     if [ ! -d "$template_dir" ] || [ ! -f "$template_dir/index.html" ]; then
         log_error "Шаблон не содержит index.html: $template_dir"
         return 1
     fi
+    if [ -n "$(find "$template_dir" -type l -print -quit 2>/dev/null)" ] ||
+       [ -n "$(find "$template_dir" ! -type f ! -type d -print -quit 2>/dev/null)" ]; then
+        log_error "Шаблон содержит ссылки или специальные файлы и не будет опубликован."
+        return 1
+    fi
+    local template_size_mb template_file_count
+    template_size_mb=$(du -sm "$template_dir" 2>/dev/null | awk '{print $1}')
+    template_file_count=$(find "$template_dir" -type f 2>/dev/null | wc -l)
+    if [ "${template_size_mb:-101}" -gt 100 ] || [ "${template_file_count:-10001}" -gt 10000 ]; then
+        log_error "Шаблон превышает лимит 100 MB или 10 000 файлов."
+        return 1
+    fi
     [ -z "$template_id" ] && template_id=$(basename "$template_dir")
     [ -f "$template_dir/.custom_git_source" ] && source_url=$(head -1 "$template_dir/.custom_git_source" 2>/dev/null || echo "")
 
+    website_parent=$(dirname "$WEBSITE_ROOT")
+    mkdir -p "$website_parent"
+    stage_dir=$(mktemp -d "$website_parent/.gotelegram-site.XXXXXX") || return 1
+    if ! cp -a "$template_dir/." "$stage_dir/"; then
+        rm -rf -- "$stage_dir"
+        return 1
+    fi
+    rm -f "$stage_dir/.custom_git_source" 2>/dev/null || true
+    echo "$template_id" > "$stage_dir/.gotelegram_template_id" 2>/dev/null || true
+    [ -n "$source_url" ] && echo "$source_url" > "$stage_dir/.gotelegram_template_source" 2>/dev/null || true
+    chown -R www-data:www-data "$stage_dir" 2>/dev/null || chown -R nginx:nginx "$stage_dir" 2>/dev/null || true
+    chmod -R 755 "$stage_dir"
+
     # Бекапим старый сайт
     if [ -d "$WEBSITE_ROOT" ] && [ "$(ls -A "$WEBSITE_ROOT" 2>/dev/null)" ]; then
-        local backup_name="site_backup_$(date +%Y%m%d_%H%M%S)"
-        mv "$WEBSITE_ROOT" "/tmp/$backup_name" 2>/dev/null
-        log_dim "Старый сайт сохранён в /tmp/$backup_name"
+        local site_backup_root="/var/lib/gotelegram/site-backups" site_backup_dir
+        mkdir -p -m 700 "$site_backup_root"
+        site_backup_dir=$(mktemp -d "$site_backup_root/site.XXXXXX") || {
+            rm -rf -- "$stage_dir"
+            return 1
+        }
+        old_site="$site_backup_dir/site"
+        mv -- "$WEBSITE_ROOT" "$old_site" || {
+            rm -rf -- "$stage_dir"
+            return 1
+        }
+        log_dim "Старый сайт сохранён в $site_backup_dir/site"
+    elif [ -d "$WEBSITE_ROOT" ]; then
+        rmdir -- "$WEBSITE_ROOT" 2>/dev/null || {
+            rm -rf -- "$stage_dir"
+            return 1
+        }
     fi
 
-    mkdir -p "$WEBSITE_ROOT"
-    cp -a "$template_dir/." "$WEBSITE_ROOT/"
-    rm -f "$WEBSITE_ROOT/.custom_git_source" 2>/dev/null || true
-    echo "$template_id" > "$WEBSITE_ROOT/.gotelegram_template_id" 2>/dev/null || true
-    [ -n "$source_url" ] && echo "$source_url" > "$WEBSITE_ROOT/.gotelegram_template_source" 2>/dev/null || true
-    chown -R www-data:www-data "$WEBSITE_ROOT" 2>/dev/null || chown -R nginx:nginx "$WEBSITE_ROOT" 2>/dev/null
-    chmod -R 755 "$WEBSITE_ROOT"
+    if ! mv -- "$stage_dir" "$WEBSITE_ROOT"; then
+        [ -n "$old_site" ] && [ -d "$old_site" ] && mv -- "$old_site" "$WEBSITE_ROOT" 2>/dev/null || true
+        rm -rf -- "$stage_dir"
+        return 1
+    fi
 
     log_success "Шаблон развёрнут в $WEBSITE_ROOT"
 }
