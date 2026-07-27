@@ -193,19 +193,35 @@ download_telemt() {
             rm -rf -- "$tmp_dir"
             return 1
         }
-        cp -a "$TELEMT_BIN" "$backup_tmp"
-        chmod 755 "$backup_tmp"
-        mv -f -- "$backup_tmp" "${TELEMT_BIN}.rollback"
+        if ! cp -a "$TELEMT_BIN" "$backup_tmp" || \
+           ! chmod 755 "$backup_tmp" || \
+           ! mv -f -- "$backup_tmp" "${TELEMT_BIN}.rollback"; then
+            rm -f -- "$backup_tmp" "$staged_bin"
+            rm -rf -- "$tmp_dir"
+            return 1
+        fi
     fi
-    mv -f -- "$staged_bin" "$TELEMT_BIN"
+    if ! mv -f -- "$staged_bin" "$TELEMT_BIN"; then
+        rm -f -- "$staged_bin"
+        rm -rf -- "$tmp_dir"
+        return 1
+    fi
     rm -rf -- "$tmp_dir"
     log_success "telemt $(get_installed_telemt_version) установлен в $TELEMT_BIN"
     return 0
 }
 
 rollback_telemt_binary() {
+    local restore_tmp
     [ -x "${TELEMT_BIN}.rollback" ] || return 1
-    install -m 755 "${TELEMT_BIN}.rollback" "$TELEMT_BIN"
+    restore_tmp=$(mktemp "${TELEMT_BIN}.restore.XXXXXX") || return 1
+    if ! cp -a "${TELEMT_BIN}.rollback" "$restore_tmp" || \
+       ! chmod 755 "$restore_tmp" || \
+       ! "$restore_tmp" --version >/dev/null 2>&1 || \
+       ! mv -f -- "$restore_tmp" "$TELEMT_BIN"; then
+        rm -f -- "$restore_tmp"
+        return 1
+    fi
 }
 
 commit_telemt_binary() {
@@ -416,13 +432,15 @@ update_telemt() {
             commit_telemt_binary
             log_success "telemt обновлён до $latest"
         else
-            rollback_telemt_binary || true
-            start_telemt || true
-            log_error "Новое ядро не запустилось; восстановлена предыдущая версия"
+            stop_telemt || true
+            if rollback_telemt_binary && start_telemt && wait_telemt_ready 90; then
+                log_error "Новое ядро не запустилось; восстановлена предыдущая версия"
+            else
+                log_error "Новое ядро не запустилось, автоматическое восстановление тоже не прошло readiness"
+            fi
             return 1
         fi
     else
-        rollback_telemt_binary >/dev/null 2>&1 || true
         start_telemt
         log_error "Обновление не удалось"
         return 1
