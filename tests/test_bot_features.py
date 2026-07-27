@@ -21,6 +21,12 @@ class BotFeatureTests(unittest.TestCase):
         self.assertNotIn('CommandHandler("lang"', bot)
         self.assertIn('SUPPORTED_LANGS = ("ru",)', i18n)
         self.assertIn('return "ru"', i18n)
+        self.assertNotIn('_load_lang_file("en")', i18n)
+
+        lang_dir = ROOT / "gotelegram-bot" / "lang"
+        english = json.loads((lang_dir / "en.json").read_text(encoding="utf-8"))
+        russian = json.loads((lang_dir / "ru.json").read_text(encoding="utf-8"))
+        self.assertEqual(set(russian), set(english))
 
     def test_operator_interfaces_do_not_contain_promotional_links(self):
         sources = [
