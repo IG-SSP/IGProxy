@@ -27,6 +27,13 @@ source {WIZARD.as_posix()!r}
 
 
 class InstallerWizardTests(unittest.TestCase):
+    def test_config_migration_preserves_extended_settings_and_seeds_client_server(self):
+        source = INSTALL.read_text(encoding="utf-8")
+        self.assertIn('--argjson existing_config "$existing_config"', source)
+        self.assertIn("$existing_config + {", source)
+        self.assertIn("--argjson client_servers", source)
+        self.assertIn('{id: $id, label: $label, url: $url, enabled: true}', source)
+
     def test_free_443_is_recommended(self):
         result = run_bash(
             """

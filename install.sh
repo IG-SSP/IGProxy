@@ -322,7 +322,7 @@ detect_template_source() {
 
 write_normalized_gotelegram_config() {
     local mode="$1" port="$2" secret="$3" mask_host="$4" domain="$5" tpl_id="$6" tpl_source="$7"
-    local lang installed_at stats_enabled tmp
+    local lang installed_at stats_enabled tmp existing_config client_servers site_url
     lang=$(read_config_or_default language "$(get_language 2>/dev/null || echo en)")
     installed_at=$(read_config_or_default installed_at "$(date -Iseconds)")
     stats_enabled=$(read_config_or_default stats_enabled "")
@@ -335,9 +335,28 @@ write_normalized_gotelegram_config() {
     reanim_synlimit=$(read_config_or_default reanim_synlimit "")
     reanim_ios=$(read_config_or_default reanim_ios_keepalive "")
     telemt_version=$(read_config_or_default telemt_version "${TELEMT_VERSION_PREF:-}")
+    existing_config=$(jq -c 'if type == "object" then . else {} end' "$GOTELEGRAM_CONFIG" 2>/dev/null || echo '{}')
+    client_servers=$(printf '%s' "$existing_config" | jq -c '
+        .client_servers // [] | if type == "array" then . else [] end
+    ' 2>/dev/null || echo '[]')
+    if [ "$(printf '%s' "$client_servers" | jq 'length' 2>/dev/null || echo 0)" = "0" ] && \
+       [ "$mode" = "pro" ] && [ -n "$domain" ]; then
+        if [ "$port" = "443" ]; then
+            site_url="https://${domain}"
+        else
+            site_url="https://${domain}:${port}"
+        fi
+        client_servers=$(jq -n \
+            --arg id "local" \
+            --arg label "$domain" \
+            --arg url "$site_url" \
+            '[{id: $id, label: $label, url: $url, enabled: true}]')
+    fi
     tmp=$(mktemp) || return 1
 
     jq -n \
+        --argjson existing_config "$existing_config" \
+        --argjson client_servers "$client_servers" \
         --arg version "$GOTELEGRAM_VERSION" \
         --arg engine "telemt" \
         --arg mode "$mode" \
@@ -356,7 +375,7 @@ write_normalized_gotelegram_config() {
         --arg reanim_ios "$reanim_ios" \
         --arg telemt_version "$telemt_version" \
         --argjson preset_ratings "$preset_ratings" \
-        '{
+        '$existing_config + {
             version: $version,
             engine: $engine,
             mode: $mode,
@@ -375,7 +394,8 @@ write_normalized_gotelegram_config() {
         + (if $reanim_synlimit != "" then {reanim_synlimit: $reanim_synlimit} else {} end)
         + (if $reanim_ios != "" then {reanim_ios_keepalive: $reanim_ios} else {} end)
         + (if $telemt_version != "" then {telemt_version: $telemt_version} else {} end)
-        + (if ($preset_ratings | length) > 0 then {preset_ratings: $preset_ratings} else {} end)' \
+        + (if ($preset_ratings | length) > 0 then {preset_ratings: $preset_ratings} else {} end)
+        + (if ($client_servers | length) > 0 then {client_servers: $client_servers} else {} end)' \
         > "$tmp" || { rm -f "$tmp"; return 1; }
 
     mkdir -p "$(dirname "$GOTELEGRAM_CONFIG")"
