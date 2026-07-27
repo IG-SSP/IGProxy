@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-goTelegram Pro Bot - MTProxy Management for Linux
+IGProxy Bot - MTProxy Management for Linux
 Manages telemt engine via Telegram interface with full CLI feature parity
 Uses python-telegram-bot v21+
 Russian-only operator interface.
@@ -107,7 +107,7 @@ def _read_gotelegram_version() -> str:
                 return str(_v)
     except Exception:
         pass
-    return "2.7.1"
+    return "2.8.0"
 
 
 GOTELEGRAM_VERSION = _read_gotelegram_version()
@@ -126,6 +126,7 @@ BOT_TOKEN = os.getenv("BOT_TOKEN")
 ENV_FILE = "/opt/gotelegram-bot/.env"
 ADMIN_WEB_SERVICE = "gotelegram-admin"
 ADMIN_WEB_PORT = 1984
+ADMIN_WEB_GUIDE = _BOT_DIR / "assets" / "termius-port-forwarding.png"
 
 
 def format_bytes_human(value: int) -> str:
@@ -573,20 +574,16 @@ def get_main_menu(user_id: Optional[int] = None) -> InlineKeyboardMarkup:
     buttons = [
         [InlineKeyboardButton(_t(user_id, "menu_status"), callback_data="menu_status")],
         [
-            InlineKeyboardButton(_t(user_id, "menu_link"), callback_data="menu_link"),
-            InlineKeyboardButton(_t(user_id, "menu_share"), callback_data="menu_share"),
-        ],
-        [
-            InlineKeyboardButton(_t(user_id, "menu_restart"), callback_data="menu_restart"),
-            InlineKeyboardButton(_t(user_id, "menu_logs"), callback_data="menu_logs"),
-        ],
-        [
-            InlineKeyboardButton(_t(user_id, "menu_backup"), callback_data="menu_backup"),
-            InlineKeyboardButton(_t(user_id, "menu_admin_web"), callback_data="menu_admin_web"),
-        ],
-        [
-            InlineKeyboardButton(_t(user_id, "menu_stats"), callback_data="menu_stats"),
             InlineKeyboardButton(_t(user_id, "menu_users"), callback_data="menu_users"),
+            InlineKeyboardButton(_t(user_id, "menu_stats"), callback_data="menu_stats"),
+        ],
+        [
+            InlineKeyboardButton(_t(user_id, "menu_logs"), callback_data="menu_logs"),
+            InlineKeyboardButton(_t(user_id, "menu_backup"), callback_data="menu_backup"),
+        ],
+        [
+            InlineKeyboardButton(_t(user_id, "menu_admin_web"), callback_data="menu_admin_web"),
+            InlineKeyboardButton(_t(user_id, "menu_restart"), callback_data="menu_restart"),
         ],
         [InlineKeyboardButton(_t(user_id, "menu_admins"), callback_data="menu_admins")],
         [InlineKeyboardButton(_t(user_id, "menu_close"), callback_data="close_menu")],
@@ -631,14 +628,27 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         return
 
     welcome = (
-        f"<b>{_tf(user_id, 'welcome_title', GOTELEGRAM_VERSION)}</b>\n\n"
-        f"{_t(user_id, 'welcome_subtitle')}\n"
-        f"{_t(user_id, 'welcome_powered')}\n\n"
-        f"{_t(user_id, 'welcome_prompt')}"
+        f"<b>IGProxy · управление прокси</b>\n\n"
+        "Этот бот управляет MTProxy: ключами, нагрузкой, трафиком, "
+        "службами, бекапами и локальной веб‑админкой.\n\n"
+        "Основано на ядре <b>telemt</b>.\n"
+        "Сделано <b>ИГ</b>.\n\n"
+        "Выберите действие:"
     )
-    await update.message.reply_text(
+    previous_id = context.user_data.pop("main_menu_message_id", None)
+    if previous_id:
+        try:
+            await context.bot.delete_message(update.effective_chat.id, previous_id)
+        except TelegramError:
+            pass
+    sent = await update.message.reply_text(
         welcome, reply_markup=get_main_menu(user_id), parse_mode="HTML"
     )
+    context.user_data["main_menu_message_id"] = sent.message_id
+    try:
+        await update.message.delete()
+    except TelegramError:
+        pass
 
 
 async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -658,9 +668,12 @@ async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
     if not await require_auth(update, context):
         return
     user_id = _uid(update)
-    await update.message.reply_text(_t(user_id, "status_checking"), parse_mode="HTML")
     status_text = await get_status_text(user_id)
     await update.message.reply_text(status_text, parse_mode="HTML")
+    try:
+        await update.message.delete()
+    except TelegramError:
+        pass
 
 
 async def cmd_logs(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -687,57 +700,83 @@ async def cmd_logs(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 # ============================================================================
 
 
-async def get_status_text(user_id: Optional[int] = None) -> str:
-    """Generate status report (localized)."""
-    lines = [f"<b>{_t(user_id, 'status_title')}</b>\n"]
-
-    # Service status
-    is_running = await check_service_status(TELEMT_SERVICE)
-    running = _t(user_id, "status_running") if is_running else _t(user_id, "status_stopped")
-    lines.append(f"<b>{_t(user_id, 'status_service')}:</b> {running}")
-
-    # Telemt version
-    version = await get_telemt_version()
-    lines.append(f"<b>{_t(user_id, 'status_telemt')}:</b> v{version}")
-
-    # Config status
-    config = load_json(GOTELEGRAM_CONFIG)
-    if config:
-        lines.append(f"<b>{_t(user_id, 'status_mode')}:</b> {html.escape(str(config.get('mode', 'unknown')))}")
-        # install.sh/save_gotelegram_config uses "template_id" (not "template")
-        tpl = config.get("template_id") or config.get("template")
-        if tpl:
-            lines.append(f"<b>{_t(user_id, 'status_template')}:</b> {html.escape(template_display_name(str(tpl)))}")
-        if config.get("domain"):
-            lines.append(f"<b>{_t(user_id, 'status_domain')}:</b> {html.escape(str(config['domain']))}")
-        if config.get("port"):
-            lines.append(f"<b>{_t(user_id, 'status_port')}:</b> {html.escape(str(config['port']))}")
-
-    # Telemt config (v3: [server] port = ..., [censorship] tls_domain = ...)
-    telemt_cfg = load_toml(TELEMT_CONFIG)
-    if telemt_cfg:
-        server_cfg = telemt_cfg.get("server", {})
-        if "port" in server_cfg:
-            lines.append(f"<b>{_t(user_id, 'status_listen_port')}:</b> {server_cfg['port']}")
-        censor_cfg = telemt_cfg.get("censorship", {})
-        if "tls_domain" in censor_cfg:
-            lines.append(f"<b>{_t(user_id, 'status_tls_domain')}:</b> {html.escape(str(censor_cfg['tls_domain']))}")
-
-    # Backups
-    backup_count = 0
+async def admin_overview_get() -> Dict[str, Any]:
+    """Read the local admin snapshot without publishing the admin externally."""
+    code, stdout, _ = await sh(
+        "curl", "-sS", "--max-time", "4",
+        f"http://127.0.0.1:{ADMIN_WEB_PORT}/api/overview",
+        timeout=6,
+    )
+    if code != 0 or not stdout.strip():
+        return {}
     try:
-        if os.path.exists(BACKUP_DIR):
-            backup_count = len([f for f in os.listdir(BACKUP_DIR) if f.endswith((".tar.gz", ".tar.gz.enc")) and not f.endswith(".sha256")])
-    except Exception:
-        pass
-    lines.append(f"<b>Backups:</b> {backup_count}")
+        payload = json.loads(stdout)
+        data = payload.get("data", payload) if isinstance(payload, dict) else {}
+        return data if isinstance(data, dict) else {}
+    except json.JSONDecodeError:
+        return {}
 
-    # Old container check
-    old_container = await check_old_container()
-    if old_container:
-        lines.append(f"\n⚠️ <b>Found old container:</b> {html.escape(old_container)}")
-        lines.append("Run 'Install' to migrate")
 
+def recent_proxy_rate() -> float:
+    """Calculate the latest measured proxy speed from cumulative snapshots."""
+    rows: List[Tuple[int, int]] = []
+    try:
+        with open("/opt/gotelegram/stats_history.csv", encoding="utf-8") as source:
+            for row in csv.reader(source):
+                if len(row) >= 2 and row[0].isdigit():
+                    rows.append((int(row[0]), int(row[1])))
+    except (OSError, ValueError):
+        return 0.0
+    if len(rows) < 2:
+        return 0.0
+    older, newer = rows[-2], rows[-1]
+    return max(0, newer[1] - older[1]) / max(1, newer[0] - older[0])
+
+
+async def get_status_text(user_id: Optional[int] = None) -> str:
+    """Generate a compact report from live system, traffic and user data."""
+    overview = await admin_overview_get()
+    config = load_json(GOTELEGRAM_CONFIG) or {}
+    system = overview.get("system", {}) if isinstance(overview.get("system"), dict) else {}
+    memory = system.get("memory", {}) if isinstance(system.get("memory"), dict) else {}
+    disk = system.get("disk", {}) if isinstance(system.get("disk"), dict) else {}
+    services = overview.get("services", {}) if isinstance(overview.get("services"), dict) else {}
+    users = load_user_records()
+    connections = active_ips = online_keys = 0
+    for name, record in users.items():
+        if not record.get("enabled"):
+            continue
+        payload = await telemt_api_get(f"/v1/users/{quote(name, safe='')}")
+        data = payload.get("data", payload) if isinstance(payload, dict) else {}
+        if not isinstance(data, dict):
+            continue
+        current = int(data.get("current_connections") or 0)
+        connections += current
+        active_ips += int(data.get("active_unique_ips") or 0)
+        online_keys += int(current > 0)
+    running = sum(1 for value in services.values() if value == "running")
+    dc_count = max(1, int(config.get("network_dc_count") or 1))
+    port = int(config.get("port") or 443)
+    lines = [
+        "<b>📊 IGProxy · текущий статус</b>",
+        "",
+        f"{'🟢' if services.get('telemt') == 'running' else '🔴'} <b>Прокси:</b> "
+        f"{html.escape(str(services.get('telemt') or 'неизвестно'))} · порт <code>{port}</code>",
+        f"<b>Службы:</b> {running}/{len(services) or 1} работают",
+        f"<b>Ключи:</b> {len(users)} всего · {online_keys} сейчас активны",
+        f"<b>Подключения:</b> {connections} · активных IP: {active_ips}",
+        f"<b>Скорость прокси:</b> {format_bytes_human(int(recent_proxy_rate()))}/с",
+        f"<b>DC в сети IGProxy:</b> {dc_count}",
+        "",
+        f"<b>CPU:</b> {float(system.get('cpu_percent') or 0):.0f}% · "
+        f"load {float((system.get('load') or [0])[0] or 0):.2f}",
+        f"<b>RAM:</b> {float(memory.get('percent') or 0):.0f}% · "
+        f"{format_bytes_human(int(memory.get('used') or 0))} / {format_bytes_human(int(memory.get('total') or 0))}",
+        f"<b>Диск:</b> {float(disk.get('percent') or 0):.0f}% · "
+        f"свободно {format_bytes_human(int(disk.get('free') or 0))}",
+        f"<b>Аптайм:</b> {int(system.get('uptime_seconds') or 0) // 3600} ч",
+        f"<b>Домен:</b> <code>{html.escape(str(config.get('domain') or config.get('mask_host') or '—'))}</code>",
+    ]
     return "\n".join(lines)
 
 
@@ -748,7 +787,7 @@ async def get_traffic_stats() -> str:
         "-lc",
         "source /opt/gotelegram/current/lib/common.sh; "
         "source /opt/gotelegram/current/lib/stats.sh; "
-        "stats_init >/dev/null 2>&1 || true; stats_collect >/dev/null 2>&1 || true",
+        "stats_collect >/dev/null 2>&1 || true",
         timeout=15,
     )
 
@@ -1738,100 +1777,6 @@ async def get_proxy_link_for_secret(secret: str) -> Optional[str]:
     return f"tg://proxy?server={server}&port={port}&secret={secret}"
 
 
-async def get_proxy_link() -> Optional[str]:
-    """Generate proxy link from config. Pro-mode uses domain + fake-TLS secret."""
-    config = load_json(GOTELEGRAM_CONFIG)
-    if not config:
-        return None
-
-    # Get secret from telemt TOML config (v3 format: [access.users] main = "...")
-    secret = config.get("secret", "")
-    if not secret:
-        telemt_cfg = load_toml(TELEMT_CONFIG)
-        if telemt_cfg:
-            access = telemt_cfg.get("access", {})
-            users = access.get("users", {})
-            if isinstance(users, dict):
-                secret = users.get("main", "")
-    if not secret:
-        return None
-
-    return await get_proxy_link_for_secret(secret)
-
-
-async def cb_menu_link(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Generate and show proxy link."""
-    query = update.callback_query
-    await query.answer()
-
-    link = await get_proxy_link()
-    if not link:
-        text = "❌ Proxy not installed yet. Run install first."
-    else:
-        text = (
-            f"<b>🔗 Proxy Link</b>\n\n"
-            f"<code>{html.escape(link)}</code>\n\n"
-            f"Open in Telegram to connect."
-        )
-
-    keyboard = InlineKeyboardMarkup(
-        [[InlineKeyboardButton(_t(_uid(update), "btn_back"), callback_data="menu_main")]]
-    )
-    await safe_edit_message(query,text, reply_markup=keyboard, parse_mode="HTML")
-
-
-async def cb_menu_share(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Share link as QR code."""
-    query = update.callback_query
-    await query.answer()
-
-    link = await get_proxy_link()
-    if not link:
-        text = "❌ Proxy not installed yet."
-        keyboard = InlineKeyboardMarkup(
-            [[InlineKeyboardButton(_t(_uid(update), "btn_back"), callback_data="menu_main")]]
-        )
-        await safe_edit_message(query,text, reply_markup=keyboard)
-        return
-
-    # Try to generate QR code
-    qr_file = None
-    code, _, _ = await sh("which", "qrencode")
-    if code == 0:
-        qr_path = "/tmp/proxy_qr.png"
-        code, _, _ = await sh("qrencode", "-o", qr_path, link)
-        if code == 0 and os.path.exists(qr_path):
-            qr_file = qr_path
-
-    if qr_file:
-        try:
-            with open(qr_file, "rb") as f:
-                await query.message.reply_photo(
-                    photo=f,
-                    caption=f"<b>📤 Proxy QR Code</b>\n\n{html.escape(link)}",
-                    parse_mode="HTML",
-                )
-        except Exception as e:
-            logger.error(f"Failed to send QR code: {e}")
-            await safe_edit_message(query,
-                f"<b>🔗 Proxy Link</b>\n\n<code>{html.escape(link)}</code>",
-                parse_mode="HTML",
-            )
-        finally:
-            try:
-                os.remove(qr_file)
-            except OSError:
-                pass
-    else:
-        await safe_edit_message(query,
-            f"<b>🔗 Proxy Link</b>\n\n<code>{html.escape(link)}</code>",
-            reply_markup=InlineKeyboardMarkup(
-                [[InlineKeyboardButton(_t(_uid(update), "btn_back"), callback_data="menu_main")]]
-            ),
-            parse_mode="HTML",
-        )
-
-
 # ============================================================================
 # TELEMT USERS
 # ============================================================================
@@ -2205,10 +2150,28 @@ async def create_user_from_text(update: Update, context: ContextTypes.DEFAULT_TY
 
 
 async def cb_menu_restart(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Restart service."""
+    """Ask for confirmation before restarting the proxy engine."""
     query = update.callback_query
     await query.answer()
+    keyboard = InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("✅ Да, перезапустить", callback_data="restart_confirm"),
+            InlineKeyboardButton("Отмена", callback_data="menu_main"),
+        ]
+    ])
+    await safe_edit_message(
+        query,
+        "<b>Перезапустить telemt?</b>\n\n"
+        "Активные подключения могут кратковременно оборваться.",
+        reply_markup=keyboard,
+        parse_mode="HTML",
+    )
 
+
+async def cb_restart_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Restart telemt after an explicit confirmation."""
+    query = update.callback_query
+    await query.answer()
     text = "⏳ Перезапускаю службу telemt..."
     await safe_edit_message(query,text)
 
@@ -2710,10 +2673,6 @@ async def cb_ssl_status(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 
 
 async def admin_web_host_hint() -> str:
-    config = load_json(GOTELEGRAM_CONFIG) or {}
-    domain = str(config.get("domain") or "")
-    if domain:
-        return domain
     code, stdout, _ = await sh("curl", "-s", "-4", "--max-time", "5", "https://api.ipify.org", timeout=7)
     return stdout.strip() if code == 0 and stdout.strip() else "SERVER_IP"
 
@@ -2725,7 +2684,10 @@ async def cb_menu_admin_web(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     running = await check_service_status(ADMIN_WEB_SERVICE)
     host = await admin_web_host_hint()
     local_url = f"http://127.0.0.1:{ADMIN_WEB_PORT}/"
-    ssh_cmd = f"ssh -L {ADMIN_WEB_PORT}:127.0.0.1:{ADMIN_WEB_PORT} root@{host}"
+    ssh_cmd = (
+        f"ssh -N -L 127.0.0.1:{ADMIN_WEB_PORT}:"
+        f"127.0.0.1:{ADMIN_WEB_PORT} root@{host}"
+    )
 
     if get_user_lang(user_id) == "ru":
         status = "запущена" if running else "не запущена"
@@ -2765,6 +2727,15 @@ async def cb_menu_admin_web(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         parse_mode="HTML",
         disable_web_page_preview=True,
     )
+    if ADMIN_WEB_GUIDE.exists() and query.message:
+        try:
+            guide = await query.message.reply_photo(
+                photo=InputFile(ADMIN_WEB_GUIDE),
+                caption="Termius → Port Forwarding → Local. В поле Intermediate host выберите свой VPS.",
+            )
+            asyncio.create_task(_delete_message_after(guide, 300))
+        except TelegramError as exc:
+            logger.warning("Failed to send Termius guide: %s", exc)
 
 
 # ============================================================================
@@ -2976,9 +2947,10 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         await query.answer()
         buttons = get_main_menu(user_id)
         text = (
-            f"<b>{_tf(user_id, 'welcome_title', GOTELEGRAM_VERSION)}</b>\n\n"
-            f"{_t(user_id, 'welcome_subtitle')}\n"
-            f"{_t(user_id, 'welcome_prompt')}"
+            "<b>IGProxy · управление прокси</b>\n\n"
+            "Ключи, состояние, трафик, службы, бекапы и веб‑админка.\n"
+            "Основано на <b>telemt</b> · сделано <b>ИГ</b>.\n\n"
+            "Выберите действие:"
         )
         await safe_edit_message(query, text, reply_markup=buttons, parse_mode="HTML")
         return
@@ -2992,9 +2964,8 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     # Dispatch to handlers
     handlers = {
         "menu_status": cb_menu_status,
-        "menu_link": cb_menu_link,
-        "menu_share": cb_menu_share,
         "menu_restart": cb_menu_restart,
+        "restart_confirm": cb_restart_confirm,
         "menu_logs": cb_menu_logs,
         "menu_backup": cb_menu_backup,
         "menu_admin_web": cb_menu_admin_web,

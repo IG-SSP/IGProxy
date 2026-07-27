@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-goTelegram local web admin.
+IGProxy local web admin.
 
 The service is intentionally bound to 127.0.0.1:1984. Operators reach it
 through an SSH tunnel; it must never be exposed directly on the public network.
@@ -20,6 +20,7 @@ import shlex
 import shutil
 import socket
 import subprocess
+import tempfile
 import time
 import urllib.error
 import urllib.parse
@@ -46,10 +47,12 @@ USER_LOCK_FILE = Path(os.getenv("GOTELEGRAM_USER_LOCK", "/run/gotelegram/admin-u
 SHARED_443_CONFIG = Path(os.getenv("GOTELEGRAM_SHARED_443", "/opt/gotelegram/shared-443.json"))
 BACKUP_SCHEDULE_FILE = Path(os.getenv("GOTELEGRAM_BACKUP_SCHEDULE", "/opt/gotelegram/backup_schedule.json"))
 BACKUP_RESTORE_LOG = Path(os.getenv("GOTELEGRAM_BACKUP_RESTORE_LOG", "/var/log/gotelegram-restore.log"))
+WEBSITE_ROOT = Path(os.getenv("GOTELEGRAM_WEBSITE_ROOT", "/var/www/gotelegram-site"))
+SITE_PRESETS_DIR = Path(os.getenv("GOTELEGRAM_SITE_PRESETS", "/opt/gotelegram/current/site-presets"))
 
 HOST = os.getenv("GOTELEGRAM_ADMIN_HOST", "127.0.0.1")
 PORT = int(os.getenv("GOTELEGRAM_ADMIN_PORT", "1984"))
-VERSION = "2.7.1"  # fallback only; live value read from config.json
+VERSION = "2.8.0"  # fallback only; live value read from config.json
 RUNTIME_COMMON_PATHS = (
     INSTALL_DIR / "current" / "lib" / "common.sh",
     Path(__file__).resolve().parents[1] / "lib" / "common.sh",
@@ -205,6 +208,81 @@ def read_language(config: dict[str, Any] | None = None) -> str:
 
 def public_config(config: dict[str, Any]) -> dict[str, Any]:
     return {key: value for key, value in config.items() if key not in SENSITIVE_CONFIG_KEYS}
+
+
+SITE_PRESETS = {
+    "glass-garden": {
+        "name": "Сад за стеклом",
+        "description": "Светлая басня о хранителях дверей и бумажных птицах.",
+    },
+    "open-library": {
+        "name": "Библиотека открытых окон",
+        "description": "Ночная история о совах, ставнях и книгах-лодках.",
+    },
+}
+
+
+def site_settings_payload() -> dict[str, Any]:
+    config = load_json(GOTELEGRAM_CONFIG, {}) or {}
+    records = read_user_records()
+    return {
+        "preset": str(config.get("site_preset") or ""),
+        "key": str(config.get("site_key") or ("main" if "main" in records else "")),
+        "presets": [
+            {"id": key, **value, "available": (SITE_PRESETS_DIR / key / "index.html").exists()}
+            for key, value in SITE_PRESETS.items()
+        ],
+        "keys": [
+            {"name": name, "enabled": bool(record.get("enabled"))}
+            for name, record in sorted(records.items(), key=lambda item: (item[0] != "main", item[0]))
+        ],
+    }
+
+
+def apply_site_preset(preset: str, key_name: str) -> dict[str, Any]:
+    if preset not in SITE_PRESETS:
+        raise ValueError("unknown site preset")
+    records = read_user_records()
+    record = records.get(key_name)
+    if not record or not record.get("enabled"):
+        raise ValueError("select an enabled key")
+    source = SITE_PRESETS_DIR / preset
+    if not (source / "index.html").is_file():
+        raise FileNotFoundError("site preset is not installed")
+    link = proxy_link(str(record["secret"]))
+    WEBSITE_ROOT.parent.mkdir(parents=True, exist_ok=True)
+    stage = Path(tempfile.mkdtemp(prefix=".igproxy-site-", dir=str(WEBSITE_ROOT.parent)))
+    previous = WEBSITE_ROOT.parent / ".igproxy-site-previous"
+    try:
+        shutil.copytree(source, stage, dirs_exist_ok=True)
+        index = stage / "index.html"
+        rendered = index.read_text(encoding="utf-8").replace("__PROXY_LINK__", link)
+        index.write_text(rendered, encoding="utf-8")
+        os.chmod(stage, 0o755)
+        for root, dirs, files in os.walk(stage):
+            for dirname in dirs:
+                os.chmod(Path(root) / dirname, 0o755)
+            for filename in files:
+                os.chmod(Path(root) / filename, 0o644)
+        if previous.exists():
+            shutil.rmtree(previous)
+        if WEBSITE_ROOT.exists():
+            WEBSITE_ROOT.replace(previous)
+        stage.replace(WEBSITE_ROOT)
+        config = load_json(GOTELEGRAM_CONFIG, {}) or {}
+        config["site_preset"] = preset
+        config["site_key"] = key_name
+        config["template_id"] = f"igproxy-{preset}"
+        config["updated_at"] = utc_now()
+        save_json(GOTELEGRAM_CONFIG, config)
+    except Exception:
+        if not WEBSITE_ROOT.exists() and previous.exists():
+            previous.replace(WEBSITE_ROOT)
+        raise
+    finally:
+        if stage.exists():
+            shutil.rmtree(stage, ignore_errors=True)
+    return site_settings_payload()
 
 
 def write_language(lang: str) -> dict[str, Any]:
@@ -1369,7 +1447,7 @@ def overview_payload() -> dict[str, Any]:
 
 
 class AdminHandler(BaseHTTPRequestHandler):
-    server_version = f"goTelegramAdmin/{VERSION}"
+    server_version = f"IGProxyAdmin/{VERSION}"
 
     def log_message(self, fmt: str, *args: Any) -> None:
         print("%s - %s" % (self.address_string(), fmt % args))
@@ -1508,6 +1586,8 @@ class AdminHandler(BaseHTTPRequestHandler):
             })
         elif path == "/api/site/check":
             self.send_json({"ok": True, "data": site_status()})
+        elif path == "/api/site/settings":
+            self.send_json({"ok": True, "data": site_settings_payload()})
         elif path == "/api/logs":
             qs = urllib.parse.parse_qs(parsed.query)
             service = qs.get("service", ["telemt"])[0]
@@ -1658,6 +1738,35 @@ class AdminHandler(BaseHTTPRequestHandler):
                 self.send_error_json(400, str(exc))
                 return
             self.send_json({"ok": True, "data": lang_payload})
+        elif path == "/api/settings/general":
+            try:
+                network_dc_count = int(body.get("network_dc_count") or 1)
+                if network_dc_count < 1 or network_dc_count > 999:
+                    raise ValueError("network_dc_count must be between 1 and 999")
+                config = load_json(GOTELEGRAM_CONFIG, {}) or {}
+                config["network_dc_count"] = network_dc_count
+                config["updated_at"] = utc_now()
+                save_json(GOTELEGRAM_CONFIG, config)
+            except (TypeError, ValueError) as exc:
+                self.send_error_json(400, str(exc))
+                return
+            self.send_json({"ok": True, "data": {"network_dc_count": network_dc_count}})
+        elif path == "/api/site/settings":
+            try:
+                payload = apply_site_preset(
+                    str(body.get("preset") or "").strip(),
+                    str(body.get("key") or "").strip(),
+                )
+            except FileNotFoundError as exc:
+                self.send_error_json(404, str(exc))
+                return
+            except ValueError as exc:
+                self.send_error_json(400, str(exc))
+                return
+            except Exception as exc:
+                self.send_error_json(500, str(exc))
+                return
+            self.send_json({"ok": True, "data": payload})
         elif path.startswith("/api/services/") and path.endswith("/restart"):
             service = path[len("/api/services/"):-len("/restart")]
             allowed = {"telemt", "nginx", "gotelegram-bot", "gotelegram-stats"}
@@ -1750,7 +1859,7 @@ def main() -> None:
     if not STATIC_DIR.exists():
         raise SystemExit(f"static dir not found: {STATIC_DIR}")
     httpd = ThreadingHTTPServer((HOST, PORT), AdminHandler)
-    print(f"goTelegram admin listening on http://{HOST}:{PORT}")
+    print(f"IGProxy admin listening on http://{HOST}:{PORT}")
     httpd.serve_forever()
 
 

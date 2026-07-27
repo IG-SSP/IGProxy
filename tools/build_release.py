@@ -20,6 +20,7 @@ PAYLOAD_PATHS = (
     "lib",
     "gotelegram-bot",
     "admin-web",
+    "site-presets",
     "DEPLOYMENT_PROFILES.md",
 )
 

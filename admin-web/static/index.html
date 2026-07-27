@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>goTelegram Clean Admin</title>
+  <title>IGProxy Admin</title>
   <script>
     (function () {
       var stored = localStorage.getItem("gotelegram-theme");
@@ -19,7 +19,7 @@
       <div class="brand">
         <div class="brand-mark">GT</div>
         <div>
-          <strong>goTelegram Clean</strong>
+          <strong>IGProxy</strong>
           <span data-i18n="brandSubtitle">Local Admin</span>
         </div>
       </div>
@@ -81,9 +81,14 @@
 
           <section class="visual-overview">
             <div>
-              <p class="eyebrow">goTelegram Clean</p>
+              <p class="eyebrow">IGProxy</p>
               <h2 id="visualTitle">Port 443</h2>
               <p id="visualText">Website, MTProxy and local admin status in one operational view.</p>
+              <div class="port-facts">
+                <div><span>Публичный адрес</span><strong id="portPublicAddress">--</strong></div>
+                <div><span>Текущая скорость</span><strong id="portCurrentRate">--</strong></div>
+                <div><span>DC в сети</span><strong id="portNetworkDc">1</strong></div>
+              </div>
             </div>
             <div class="port-map" id="port443Map">
               <div class="port-map-head">
@@ -185,6 +190,14 @@
                 <button type="button" data-traffic-view="chart" data-i18n="viewChart">Chart</button>
                 <button type="button" data-traffic-view="table" data-i18n="viewRows">Rows</button>
               </div>
+              <div class="segmented" id="trafficMetric" aria-label="Единицы графика">
+                <button type="button" data-traffic-metric="rate" class="active">Скорость</button>
+                <button type="button" data-traffic-metric="delta">За интервал</button>
+                <button type="button" data-traffic-metric="total">Накопительно</button>
+              </div>
+              <label class="chart-check"><input id="trafficSmooth" type="checkbox" checked> Сглаживание</label>
+              <label class="chart-check"><input id="trafficProxySeries" type="checkbox" checked> Прокси</label>
+              <label class="chart-check"><input id="trafficSiteSeries" type="checkbox" checked> Сайт</label>
             </div>
             <div id="trafficInsights" class="chart-insights" aria-live="polite"></div>
             <div id="trafficChart" class="traffic-chart"></div>
@@ -312,7 +325,7 @@
               </div>
               <div class="backup-includes">
                 <strong data-i18n="backupIncludesTitle">Backup contents</strong>
-                <span data-i18n="backupIncludesText">telemt config, goTelegram settings, keys, disabled keys, site, templates, SSL certificates, bot, admin panel and traffic history.</span>
+                <span data-i18n="backupIncludesText">telemt config, IGProxy settings, keys, disabled keys, site, templates, SSL certificates, bot, admin panel and traffic history.</span>
               </div>
               <div id="backupsList" class="backup-list"></div>
             </section>
@@ -376,6 +389,29 @@
                   <strong id="settingsBind">127.0.0.1:1984</strong>
                 </div>
               </div>
+              <div class="settings-control-group">
+                <strong>Тема интерфейса</strong>
+                <div class="segmented">
+                  <button type="button" data-theme-mode="system">Как в системе</button>
+                  <button type="button" data-theme-mode="dark">Тёмная</button>
+                  <button type="button" data-theme-mode="light">Светлая</button>
+                </div>
+              </div>
+              <div class="settings-control-group">
+                <strong>Автообновление</strong>
+                <div class="segmented">
+                  <button type="button" data-refresh-ms="0">Выкл</button>
+                  <button type="button" data-refresh-ms="5000">5 сек</button>
+                  <button type="button" data-refresh-ms="15000">15 сек</button>
+                  <button type="button" data-refresh-ms="30000">30 сек</button>
+                </div>
+              </div>
+              <form id="generalSettingsForm" class="settings-form">
+                <label>Количество DC в сети IGProxy
+                  <input id="networkDcCount" type="number" min="1" max="999" value="1">
+                </label>
+                <button type="submit">Сохранить</button>
+              </form>
             </section>
 
             <section class="panel">
@@ -388,6 +424,22 @@
               <div id="configList" class="settings-list"></div>
             </section>
           </div>
+          <section class="panel site-settings-panel">
+            <div class="panel-head">
+              <div>
+                <p class="eyebrow">Публичный сайт</p>
+                <h2>Витрина и кнопка подключения</h2>
+              </div>
+            </div>
+            <p class="panel-note">Выберите готовую аллегорическую витрину и ключ, который будет подключаться по большой кнопке на сайте.</p>
+            <form id="siteSettingsForm" class="site-settings-form">
+              <div id="sitePresetCards" class="site-preset-cards"></div>
+              <label>Ключ для кнопки
+                <select id="siteKey"></select>
+              </label>
+              <button type="submit">Опубликовать выбранный сайт</button>
+            </form>
+          </section>
         </section>
       </main>
     </div>
@@ -406,6 +458,6 @@
       <button id="qrCopyBtn" type="button" class="soft" data-i18n="copyLink">Copy link</button>
     </div>
   </div>
-  <script src="/app.js?v=clean-0.3" type="module"></script>
+  <script src="/app.js?v=igproxy-0.5" type="module"></script>
 </body>
 </html>

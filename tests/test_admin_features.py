@@ -22,6 +22,8 @@ def load_server(tmpdir: Path):
     os.environ["GOTELEGRAM_DIR"] = str(tmpdir / "gotelegram")
     os.environ["TELEMT_CONFIG"] = str(tmpdir / "etc" / "telemt" / "config.toml")
     os.environ["GOTELEGRAM_DISABLED_USERS"] = str(tmpdir / "gotelegram" / "disabled_users.json")
+    os.environ["GOTELEGRAM_WEBSITE_ROOT"] = str(tmpdir / "site")
+    os.environ["GOTELEGRAM_SITE_PRESETS"] = str(ROOT / "site-presets")
     module_name = "gotelegram_admin_server_test"
     sys.modules.pop(module_name, None)
     spec = importlib.util.spec_from_file_location(module_name, SERVER_PATH)
@@ -307,6 +309,41 @@ class AdminFeatureTests(unittest.TestCase):
         self.assertIn("fmtSystemdTime", script)
         self.assertIn('id="backupDashboard"', html)
         self.assertIn("modePresentation", script)
+
+    def test_igproxy_brand_graph_controls_and_site_settings_exist(self):
+        html = INDEX_PATH.read_text(encoding="utf-8")
+        script = APP_JS_PATH.read_text(encoding="utf-8")
+        styles = (ROOT / "admin-web" / "static" / "styles.css").read_text(encoding="utf-8")
+        server = (ROOT / "admin-web" / "server.py").read_text(encoding="utf-8")
+
+        self.assertIn("<strong>IGProxy</strong>", html)
+        self.assertNotIn("goTelegram Clean", html)
+        self.assertIn('data-traffic-metric="rate"', html)
+        self.assertIn('id="trafficSmooth"', html)
+        self.assertIn("chart-point", script)
+        self.assertIn('id="siteSettingsForm"', html)
+        self.assertIn("/api/site/settings", server)
+        self.assertIn("apply_site_preset", server)
+        self.assertIn(".site-preset-card", styles)
+
+    def test_site_preset_is_rendered_for_selected_key_and_is_world_readable(self):
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            config = root / "etc" / "telemt" / "config.toml"
+            config.parent.mkdir(parents=True)
+            config.write_text(
+                '[access.users]\nmain = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"\n',
+                encoding="utf-8",
+            )
+            server = load_server(root)
+            with mock.patch.object(server, "proxy_link", return_value="tg://proxy?test=1"):
+                payload = server.apply_site_preset("glass-garden", "main")
+
+            index = (server.WEBSITE_ROOT / "index.html").read_text(encoding="utf-8")
+            self.assertIn("tg://proxy?test=1", index)
+            self.assertNotIn("__PROXY_LINK__", index)
+            self.assertEqual(payload["preset"], "glass-garden")
+            self.assertTrue(server.WEBSITE_ROOT.stat().st_mode & 0o005)
 
     def test_get_config_value_secret_accepts_quoted_main_user(self):
         with tempfile.TemporaryDirectory() as raw:

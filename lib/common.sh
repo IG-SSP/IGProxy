@@ -3,8 +3,8 @@
 # Colors, logging, spinner, system helpers, v1 compat, i18n-aware
 
 # ── Version ───────────────────────────────────────────────────────────────────
-GOTELEGRAM_VERSION="2.7.26"
-GOTELEGRAM_NAME="goTelegram"
+GOTELEGRAM_VERSION="2.8.0"
+GOTELEGRAM_NAME="IGProxy"
 
 # ── Пути ──────────────────────────────────────────────────────────────────────
 GOTELEGRAM_DIR="/opt/gotelegram"

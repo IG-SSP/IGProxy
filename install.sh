@@ -1507,6 +1507,10 @@ bot_install() {
         fi
         [ -f "$SCRIPT_DIR/gotelegram-bot/i18n.py" ] && \
             cp "$SCRIPT_DIR/gotelegram-bot/i18n.py" "$BOT_DIR/"
+        if [ -d "$SCRIPT_DIR/gotelegram-bot/assets" ]; then
+            mkdir -p "$BOT_DIR/assets"
+            cp -f "$SCRIPT_DIR/gotelegram-bot/assets/"* "$BOT_DIR/assets/" 2>/dev/null || true
+        fi
     else
         log_error "$(tf bot_files_not_found "$SCRIPT_DIR/gotelegram-bot/")"
         return 1

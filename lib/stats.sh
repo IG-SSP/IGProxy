@@ -68,17 +68,24 @@ stats_init() {
     local proxy_port site_port
     proxy_port=$(stats_proxy_port)
     site_port=$(stats_site_port)
-    # Цепочка принадлежит только goTelegram: пересобираем её из фактических
-    # портов конфига, чтобы Alternate profile не учитывался как 443/8443.
-    iptables -F GOTELEGRAM_STATS 2>/dev/null || true
-    iptables -A GOTELEGRAM_STATS -p tcp --dport "$proxy_port" -m comment --comment gotelegram-proxy 2>/dev/null || {
-        log_error "Не удалось создать счётчик для публичного порта $proxy_port"
-        return 1
-    }
-    iptables -A GOTELEGRAM_STATS -i lo -p tcp --dport "$site_port" -m comment --comment gotelegram-site 2>/dev/null || {
-        log_error "Не удалось создать счётчик для внутреннего сайта $site_port"
-        return 1
-    }
+    # Не очищаем цепочку при каждом stats_init: iptables-счётчики накопительные,
+    # поэтому flush обнулял трафик при открытии статистики в боте/админке.
+    # Пересобираем только отсутствующие или устаревшие правила.
+    local proxy_rule site_rule rule_count
+    proxy_rule=$(iptables -S GOTELEGRAM_STATS 2>/dev/null | grep -F -- "--dport $proxy_port" | grep -F -- "--comment gotelegram-proxy" | head -1 || true)
+    site_rule=$(iptables -S GOTELEGRAM_STATS 2>/dev/null | grep -F -- "-i lo" | grep -F -- "--dport $site_port" | grep -F -- "--comment gotelegram-site" | head -1 || true)
+    rule_count=$(iptables -S GOTELEGRAM_STATS 2>/dev/null | grep -c '^-A ' || true)
+    if [[ -z "$proxy_rule" || -z "$site_rule" || "$rule_count" -ne 2 ]]; then
+        iptables -F GOTELEGRAM_STATS 2>/dev/null || true
+        iptables -A GOTELEGRAM_STATS -p tcp --dport "$proxy_port" -m comment --comment gotelegram-proxy 2>/dev/null || {
+            log_error "Не удалось создать счётчик для публичного порта $proxy_port"
+            return 1
+        }
+        iptables -A GOTELEGRAM_STATS -i lo -p tcp --dport "$site_port" -m comment --comment gotelegram-site 2>/dev/null || {
+            log_error "Не удалось создать счётчик для внутреннего сайта $site_port"
+            return 1
+        }
+    fi
 
     # Initialize CSV header if file doesn't exist
     if [[ ! -f "$HISTORY_FILE" ]]; then

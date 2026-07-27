@@ -63,6 +63,35 @@ class BotFeatureTests(unittest.TestCase):
         ):
             self.assertNotIn(f'callback_data="{callback}"', body)
 
+    def test_bot_menu_has_single_keys_entry_and_restart_confirmation(self):
+        source = BOT_PATH.read_text(encoding="utf-8")
+        menu_body = re.search(
+            r"def get_main_menu\(.*?(?=\n\n(?:async )?def |\n\n#)",
+            source,
+            flags=re.S,
+        ).group(0)
+        self.assertEqual(menu_body.count('callback_data="menu_users"'), 1)
+        self.assertNotIn('callback_data="menu_link"', menu_body)
+        self.assertNotIn('callback_data="menu_share"', menu_body)
+        self.assertIn('callback_data="restart_confirm"', source)
+        self.assertIn('"restart_confirm": cb_restart_confirm', source)
+
+    def test_admin_help_uses_pinned_local_tunnel_and_screenshot(self):
+        source = BOT_PATH.read_text(encoding="utf-8")
+        self.assertIn("ssh -N -L 127.0.0.1:", source)
+        self.assertIn("termius-port-forwarding.png", source)
+        self.assertIn("reply_photo", source)
+
+    def test_stats_view_does_not_reinitialize_firewall_counters(self):
+        source = BOT_PATH.read_text(encoding="utf-8")
+        stats_body = re.search(
+            r"async def get_traffic_stats\(.*?(?=\n\n(?:async )?def |\n\n#)",
+            source,
+            flags=re.S,
+        ).group(0)
+        self.assertIn("stats_collect", stats_body)
+        self.assertNotIn("stats_init", stats_body)
+
     def test_catalog_contains_template_ids_that_break_raw_callback_data(self):
         catalog = json.loads(CATALOG_PATH.read_text(encoding="utf-8"))
         raw_lengths = [

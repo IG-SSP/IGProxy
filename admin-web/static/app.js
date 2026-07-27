@@ -92,7 +92,7 @@ const i18n = {
     backupScheduleTitle: "Automatic backups",
     backupScheduleLoading: "Loading schedule...",
     backupIncludesTitle: "Backup contents",
-    backupIncludesText: "telemt config, goTelegram settings, keys, disabled keys, site, templates, SSL certificates, bot, admin panel and traffic history.",
+    backupIncludesText: "telemt config, IGProxy settings, keys, disabled keys, site, templates, SSL certificates, bot, admin panel and traffic history.",
     scheduleOff: "Off",
     scheduleDaily: "Daily",
     scheduleWeekly: "Weekly",
@@ -320,7 +320,7 @@ const i18n = {
     backupScheduleTitle: "Автобекапы",
     backupScheduleLoading: "Загрузка расписания...",
     backupIncludesTitle: "Что входит в бекап",
-    backupIncludesText: "конфиг telemt, настройки goTelegram, ключи, отключённые ключи, сайт, шаблоны, SSL-сертификаты, бот, админка и история трафика.",
+    backupIncludesText: "конфиг telemt, настройки IGProxy, ключи, отключённые ключи, сайт, шаблоны, SSL-сертификаты, бот, админка и история трафика.",
     scheduleOff: "Выкл",
     scheduleDaily: "Каждый день",
     scheduleWeekly: "Каждую неделю",
@@ -490,6 +490,8 @@ const i18n = {
   },
 };
 
+const AUTO_REFRESH_MS = 5000;
+
 const state = {
   overview: null,
   stats: null,
@@ -500,6 +502,10 @@ const state = {
   theme: document.documentElement.dataset.theme || "light",
   trafficRange: "1h",
   trafficView: "chart",
+  trafficMetric: "rate",
+  trafficSmooth: true,
+  trafficProxySeries: true,
+  trafficSiteSeries: true,
   trafficLoading: false,
   userTrafficUser: "",
   userTrafficRange: "1h",
@@ -516,12 +522,15 @@ const state = {
   logsPayload: null,
   refreshingAll: false,
   autoRefreshEnabled: localStorage.getItem("gotelegram-auto-refresh") !== "0",
+  autoRefreshMs: Number(localStorage.getItem("igproxy-refresh-ms") || AUTO_REFRESH_MS),
+  themeMode: localStorage.getItem("igproxy-theme-mode") || "system",
+  siteSettings: null,
+  selectedSitePreset: "",
 };
 
 const t = (key) => (i18n[state.lang] && i18n[state.lang][key]) || i18n.en[key] || key;
 
 const trafficRanges = ["15m", "1h", "24h", "month"];
-const AUTO_REFRESH_MS = 5000;
 let autoRefreshTimer = null;
 
 const fmtBytes = (value = 0) => {
@@ -643,7 +652,10 @@ function updateAutoRefreshToggle() {
   button.setAttribute("aria-pressed", String(state.autoRefreshEnabled));
   button.title = state.autoRefreshEnabled ? t("autoRefreshOn") : t("autoRefreshOff");
   const label = button.querySelector(".auto-refresh-state");
-  if (label) label.textContent = state.autoRefreshEnabled ? "5s" : t("autoRefreshOffShort");
+  if (label) label.textContent = state.autoRefreshEnabled ? `${state.autoRefreshMs / 1000}s` : t("autoRefreshOffShort");
+  $$("[data-refresh-ms]").forEach((item) => {
+    item.classList.toggle("active", Number(item.dataset.refreshMs) === (state.autoRefreshEnabled ? state.autoRefreshMs : 0));
+  });
 }
 
 function syncAutoRefreshTimer() {
@@ -654,12 +666,14 @@ function syncAutoRefreshTimer() {
   if (!state.autoRefreshEnabled) return;
   autoRefreshTimer = setInterval(() => {
     refreshAll({ silent: true }).catch(() => {});
-  }, AUTO_REFRESH_MS);
+  }, state.autoRefreshMs);
 }
 
-function setAutoRefresh(enabled) {
+function setAutoRefresh(enabled, interval = state.autoRefreshMs) {
   state.autoRefreshEnabled = Boolean(enabled);
+  state.autoRefreshMs = Math.max(5000, Number(interval) || 5000);
   localStorage.setItem("gotelegram-auto-refresh", state.autoRefreshEnabled ? "1" : "0");
+  localStorage.setItem("igproxy-refresh-ms", String(state.autoRefreshMs));
   updateAutoRefreshToggle();
   syncAutoRefreshTimer();
 }
@@ -694,8 +708,10 @@ function applyI18n() {
   });
   $("#themeToggle").textContent = state.theme === "dark" ? t("themeLight") : t("themeDark");
   $("#settingsTheme").textContent = state.theme === "dark" ? t("darkTheme") : t("lightTheme");
-  $("#visualTitle").textContent = t("visualTitle");
-  $("#visualText").textContent = t("visualText");
+  if (!state.overview) {
+    $("#visualTitle").textContent = t("visualTitle");
+    $("#visualText").textContent = t("visualText");
+  }
   updateTrafficControls();
   updateUserTrafficControls();
   renderBackupSchedule();
@@ -710,6 +726,14 @@ function setTheme(theme) {
   applyI18n();
   if (state.overview) renderStats();
   if (state.userTraffic) renderUserTraffic();
+}
+
+function setThemeMode(mode) {
+  state.themeMode = ["system", "dark", "light"].includes(mode) ? mode : "system";
+  localStorage.setItem("igproxy-theme-mode", state.themeMode);
+  const systemDark = matchMedia("(prefers-color-scheme: dark)").matches;
+  setTheme(state.themeMode === "system" ? (systemDark ? "dark" : "light") : state.themeMode);
+  $$("[data-theme-mode]").forEach((item) => item.classList.toggle("active", item.dataset.themeMode === state.themeMode));
 }
 
 function setPage(page, push = true) {
@@ -742,7 +766,6 @@ function updatePageTitle() {
 
 function updateLanguageFromOverview(data) {
   state.lang = "ru";
-  applyI18n();
 }
 
 function statusLabel(status) {
@@ -881,6 +904,7 @@ function renderPort443(payload = {}) {
   const configuredPort = Number(payload.configured_port) || 443;
   $("#port443Number").textContent = String(configuredPort);
   $("#visualTitle").textContent = `Порт ${configuredPort}`;
+  $("#visualText").textContent = "Публичная точка входа и все сервисы за ней — без скачущих названий при обновлении.";
   $("#port443Configured").textContent = configuredPort === 443 ? t("port443Public") : t("port443Configured").replace("{port}", configuredPort);
   if (payload.error) {
     summary.textContent = t("port443Error");
@@ -938,6 +962,15 @@ function renderOverview() {
   $("#metricMode").title = mode.help;
   renderSiteStatus();
   renderPort443(data.port_443 || {});
+  const trafficRows = data.stats_history || [];
+  const latest = trafficRows[trafficRows.length - 1] || {};
+  const previous = trafficRows[trafficRows.length - 2] || {};
+  const elapsed = Math.max(1, (Number(latest.epoch) || 0) - (Number(previous.epoch) || 0));
+  const currentRate = Math.max(0, (Number(latest.proxy_bytes) || 0) - (Number(previous.proxy_bytes) || 0)) / elapsed;
+  $("#portPublicAddress").textContent = `${cfg.domain || cfg.mask_host || "сервер"}:${cfg.port || 443}`;
+  $("#portCurrentRate").textContent = `${fmtBytes(currentRate)}/с`;
+  $("#portNetworkDc").textContent = cfg.network_dc_count || 1;
+  $("#networkDcCount").value = cfg.network_dc_count || 1;
   $("#metricUsers").textContent = data.users_count ?? 0;
   $("#metricProxyTraffic").textContent = fmtBytes(stats.proxy_bytes);
   $("#metricProxyPackets").textContent = `${stats.proxy_pkts || 0} ${t("packets")}`;
@@ -977,6 +1010,12 @@ function updateTrafficControls() {
   $$("[data-traffic-view]").forEach((btn) => {
     btn.classList.toggle("active", btn.dataset.trafficView === state.trafficView);
   });
+  $$("[data-traffic-metric]").forEach((btn) => {
+    btn.classList.toggle("active", btn.dataset.trafficMetric === state.trafficMetric);
+  });
+  $("#trafficSmooth").checked = state.trafficSmooth;
+  $("#trafficProxySeries").checked = state.trafficProxySeries;
+  $("#trafficSiteSeries").checked = state.trafficSiteSeries;
 }
 
 function updateUserTrafficControls() {
@@ -1090,18 +1129,39 @@ function renderTrafficInsights(rows) {
   const points = filterTrafficRows(rows);
   const proxy = points.reduce((sum, item) => sum + Math.max(0, Number(item.proxy_delta) || 0), 0);
   const site = points.reduce((sum, item) => sum + Math.max(0, Number(item.site_delta) || 0), 0);
-  const peak = Math.max(0, ...points.map((item) => Math.max(Number(item.proxy_delta) || 0, Number(item.site_delta) || 0)));
+  const rates = points.map((item, index) => {
+    const before = points[Math.max(0, index - 1)];
+    const after = points[Math.min(points.length - 1, index + 1)];
+    const seconds = Math.max(1, index ? Number(item.epoch) - Number(before.epoch) : Number(after.epoch) - Number(item.epoch));
+    return Math.max(0, Number(item.proxy_delta) || 0) / seconds;
+  });
+  const peakRate = Math.max(0, ...rates);
+  const currentRate = rates[rates.length - 1] || 0;
   const html = `
     <article class="chart-insight series-proxy"><span>${escapeHtml(t("chartProxyPeriod"))}</span><strong>${escapeHtml(fmtBytes(proxy))}</strong><small>${escapeHtml(trafficRangeLabel(state.trafficRange))}</small></article>
     <article class="chart-insight series-site"><span>${escapeHtml(t("chartSitePeriod"))}</span><strong>${escapeHtml(fmtBytes(site))}</strong><small>${escapeHtml(trafficRangeLabel(state.trafficRange))}</small></article>
-    <article class="chart-insight"><span>${escapeHtml(t("chartPeak"))}</span><strong>${escapeHtml(fmtBytes(peak))}</strong><small>${escapeHtml(`${points.length} ${t("chartPoints").toLowerCase()}`)}</small></article>
-    <article class="chart-insight explainer"><span>${escapeHtml(t("chartExplanation"))}</span></article>`;
-  stableHtml($("#trafficInsights"), html, JSON.stringify([state.trafficRange, proxy, site, peak, points.length]));
+    <article class="chart-insight"><span>Сейчас</span><strong>${escapeHtml(`${fmtBytes(currentRate)}/с`)}</strong><small>последний интервал</small></article>
+    <article class="chart-insight"><span>Пиковая скорость</span><strong>${escapeHtml(`${fmtBytes(peakRate)}/с`)}</strong><small>${escapeHtml(`${points.length} точек`)}</small></article>`;
+  stableHtml($("#trafficInsights"), html, JSON.stringify([state.trafficRange, proxy, site, currentRate, peakRate, points.length]));
 }
 
 function drawTrafficChart(rows) {
   const el = $("#trafficChart");
-  const points = bucketTrafficRows(rows);
+  const rawPoints = bucketTrafficRows(rows);
+  const points = rawPoints.map((point, index) => {
+    const previous = rawPoints[Math.max(0, index - 1)];
+    const next = rawPoints[Math.min(rawPoints.length - 1, index + 1)];
+    const seconds = Math.max(1, index
+      ? (Number(point.epoch) || 0) - (Number(previous.epoch) || 0)
+      : (Number(next.epoch) || 0) - (Number(point.epoch) || 0));
+    if (state.trafficMetric === "total") {
+      return { ...point, proxy_value: Number(point.proxy_bytes) || 0, site_value: Number(point.site_bytes) || 0 };
+    }
+    if (state.trafficMetric === "rate") {
+      return { ...point, proxy_value: (Number(point.proxy_delta) || 0) / seconds, site_value: (Number(point.site_delta) || 0) / seconds };
+    }
+    return { ...point, proxy_value: Number(point.proxy_delta) || 0, site_value: Number(point.site_delta) || 0 };
+  });
   const proxyColor = getComputedStyle(document.documentElement).getPropertyValue("--blue").trim() || "#2563eb";
   const siteColor = getComputedStyle(document.documentElement).getPropertyValue("--green").trim() || "#0f9f6e";
   if (points.length < 2) {
@@ -1114,21 +1174,34 @@ function drawTrafficChart(rows) {
   const width = 900;
   const height = 300;
   const pad = { l: 54, r: 22, t: 24, b: 42 };
-  const max = Math.max(1, ...points.map((p) => Math.max(p.proxy_delta || 0, p.site_delta || 0)));
+  const max = Math.max(1, ...points.map((p) => Math.max(
+    state.trafficProxySeries ? p.proxy_value || 0 : 0,
+    state.trafficSiteSeries ? p.site_value || 0 : 0,
+  )));
   const plotW = width - pad.l - pad.r;
   const plotH = height - pad.t - pad.b;
   const toX = (i) => pad.l + (plotW * i) / Math.max(1, points.length - 1);
   const toY = (v) => pad.t + plotH - ((v || 0) / max) * plotH;
-  const pathFor = (key) => smoothSvgPath(points, key, toX, toY);
+  const pathFor = (key) => {
+    if (state.trafficSmooth) return smoothSvgPath(points, key, toX, toY);
+    return points.map((point, index) => `${index ? "L" : "M"}${toX(index).toFixed(1)},${toY(point[key]).toFixed(1)}`).join(" ");
+  };
   const grid = Array.from({ length: 5 }, (_, i) => {
     const y = pad.t + (plotH / 4) * i;
     return `<line x1="${pad.l}" y1="${y}" x2="${width - pad.r}" y2="${y}"></line>`;
   }).join("");
-  const axis = t("chartMax").replace("{value}", fmtBytes(max));
+  const valueLabel = (value) => `${fmtBytes(value)}${state.trafficMetric === "rate" ? "/с" : ""}`;
+  const metricLabel = state.trafficMetric === "rate" ? "скорость" : (state.trafficMetric === "total" ? "накопительный итог" : "за интервал");
+  const axis = `макс. ${valueLabel(max)} · ${metricLabel}`;
   const firstTime = compactTime(points[0].epoch);
   const lastTime = compactTime(points[points.length - 1].epoch);
-  const lastProxy = points[points.length - 1].proxy_delta || 0;
-  const lastSite = points[points.length - 1].site_delta || 0;
+  const lastProxy = points[points.length - 1].proxy_value || 0;
+  const lastSite = points[points.length - 1].site_value || 0;
+  const pointMarkers = points.map((point, index) => {
+    const label = `${fmtDate(point.epoch)} · прокси ${valueLabel(point.proxy_value)} · сайт ${valueLabel(point.site_value)}`;
+    return `${state.trafficProxySeries ? `<circle class="chart-point" cx="${toX(index)}" cy="${toY(point.proxy_value)}" r="4" fill="${proxyColor}"><title>${escapeHtml(label)}</title></circle>` : ""}
+      ${state.trafficSiteSeries ? `<circle class="chart-point" cx="${toX(index)}" cy="${toY(point.site_value)}" r="4" fill="${siteColor}"><title>${escapeHtml(label)}</title></circle>` : ""}`;
+  }).join("");
   const html = `<svg viewBox="0 0 ${width} ${height}" role="img" aria-label="${escapeAttr(t("ariaTrafficHistory"))}">
     <defs>
       <linearGradient id="proxyGradient" x1="0" y1="0" x2="0" y2="1">
@@ -1141,19 +1214,16 @@ function drawTrafficChart(rows) {
       </linearGradient>
     </defs>
     <g class="grid">${grid}</g>
-    <path class="area proxy-area" style="fill:url(#proxyGradient)" d="${pathFor("proxy_delta")} L${width - pad.r},${height - pad.b} L${pad.l},${height - pad.b} Z"></path>
-    <path class="area site-area" style="fill:url(#siteGradient)" d="${pathFor("site_delta")} L${width - pad.r},${height - pad.b} L${pad.l},${height - pad.b} Z"></path>
-    <path class="line proxy-line" pathLength="1" d="${pathFor("proxy_delta")}"></path>
-    <path class="line site-line" pathLength="1" d="${pathFor("site_delta")}"></path>
-    <circle class="last-point" cx="${toX(points.length - 1)}" cy="${toY(lastProxy)}" r="5" fill="${proxyColor}"></circle>
-    <circle class="last-point" cx="${toX(points.length - 1)}" cy="${toY(lastSite)}" r="5" fill="${siteColor}"></circle>
+    ${state.trafficProxySeries ? `<path class="area proxy-area" style="fill:url(#proxyGradient)" d="${pathFor("proxy_value")} L${width - pad.r},${height - pad.b} L${pad.l},${height - pad.b} Z"></path><path class="line proxy-line" pathLength="1" d="${pathFor("proxy_value")}"></path><circle class="last-point" cx="${toX(points.length - 1)}" cy="${toY(lastProxy)}" r="5" fill="${proxyColor}"></circle>` : ""}
+    ${state.trafficSiteSeries ? `<path class="area site-area" style="fill:url(#siteGradient)" d="${pathFor("site_value")} L${width - pad.r},${height - pad.b} L${pad.l},${height - pad.b} Z"></path><path class="line site-line" pathLength="1" d="${pathFor("site_value")}"></path><circle class="last-point" cx="${toX(points.length - 1)}" cy="${toY(lastSite)}" r="5" fill="${siteColor}"></circle>` : ""}
+    ${pointMarkers}
     <text x="${pad.l}" y="17" class="axis">${escapeHtml(axis)}</text>
-    <text x="${pad.l - 8}" y="${pad.t + 4}" text-anchor="end" class="axis-value">${escapeHtml(fmtBytes(max))}</text>
-    <text x="${pad.l - 8}" y="${pad.t + plotH / 2 + 4}" text-anchor="end" class="axis-value">${escapeHtml(fmtBytes(max / 2))}</text>
+    <text x="${pad.l - 8}" y="${pad.t + 4}" text-anchor="end" class="axis-value">${escapeHtml(valueLabel(max))}</text>
+    <text x="${pad.l - 8}" y="${pad.t + plotH / 2 + 4}" text-anchor="end" class="axis-value">${escapeHtml(valueLabel(max / 2))}</text>
     <text x="${pad.l}" y="${height - pad.b + 18}" class="axis-time">${escapeHtml(firstTime)}</text>
     <text x="${width - pad.r}" y="${height - pad.b + 18}" text-anchor="end" class="axis-time">${escapeHtml(lastTime)}</text>
   </svg>`;
-  stableHtml(el, html, JSON.stringify([state.trafficRange, state.theme, points]));
+  stableHtml(el, html, JSON.stringify([state.trafficRange, state.theme, state.trafficMetric, state.trafficSmooth, state.trafficProxySeries, state.trafficSiteSeries, points]));
 }
 
 function renderHistoryTable(rows) {
@@ -1521,16 +1591,64 @@ function renderConfig() {
   `).join("");
 }
 
+function renderSiteSettings() {
+  const data = state.siteSettings;
+  if (!data) return;
+  if (!state.selectedSitePreset) state.selectedSitePreset = data.preset || data.presets?.[0]?.id || "";
+  $("#sitePresetCards").innerHTML = (data.presets || []).map((preset) => `
+    <button type="button" class="site-preset-card ${preset.id === state.selectedSitePreset ? "active" : ""}"
+      data-site-preset="${escapeAttr(preset.id)}" ${preset.available ? "" : "disabled"}>
+      <strong>${escapeHtml(preset.name)}</strong>
+      <span>${escapeHtml(preset.description)}</span>
+    </button>
+  `).join("");
+  const enabledKeys = (data.keys || []).filter((item) => item.enabled);
+  $("#siteKey").innerHTML = enabledKeys.map((item) => `
+    <option value="${escapeAttr(item.name)}" ${item.name === data.key ? "selected" : ""}>${escapeHtml(item.name)}</option>
+  `).join("");
+}
+
+async function saveSiteSettings() {
+  const button = $("#siteSettingsForm button[type=submit]");
+  button.disabled = true;
+  try {
+    state.siteSettings = await api("/api/site/settings", {
+      method: "POST",
+      body: JSON.stringify({ preset: state.selectedSitePreset, key: $("#siteKey").value }),
+    });
+    renderSiteSettings();
+    toast("Сайт опубликован");
+    await refreshAll({ silent: true });
+  } finally {
+    button.disabled = false;
+  }
+}
+
+async function saveGeneralSettings() {
+  await api("/api/settings/general", {
+    method: "POST",
+    body: JSON.stringify({ network_dc_count: Number($("#networkDcCount").value) || 1 }),
+  });
+  toast("Настройки сохранены");
+  await refreshAll({ silent: true });
+}
+
 async function refreshAll(options = {}) {
   if (state.refreshingAll) return;
   state.refreshingAll = true;
   const btn = $("#refreshBtn");
   if (!options.silent) btn.disabled = true;
   try {
-    state.overview = await api("/api/overview");
+    const [overview, users, siteSettings] = await Promise.all([
+      api("/api/overview"),
+      api("/api/users"),
+      api("/api/site/settings"),
+    ]);
+    state.overview = overview;
     state.backupSchedule = state.overview.backup_schedule || state.backupSchedule;
     updateLanguageFromOverview(state.overview);
-    state.users = await api("/api/users");
+    state.users = users;
+    state.siteSettings = siteSettings;
     ensureUserTrafficSelection();
     if (!state.stats) {
       state.stats = {
@@ -1548,6 +1666,7 @@ async function refreshAll(options = {}) {
     }
     renderOverview();
     renderUsers();
+    renderSiteSettings();
     if (state.page === "traffic") {
       await refreshStats();
     } else if (state.page === "keys") {
@@ -1949,7 +2068,12 @@ document.addEventListener("click", async (eventObj) => {
   const button = eventObj.target.closest("button");
   if (button) {
     if (button.id === "themeToggle") {
-      setTheme(state.theme === "dark" ? "light" : "dark");
+      setThemeMode(state.theme === "dark" ? "light" : "dark");
+    } else if (button.dataset.themeMode) {
+      setThemeMode(button.dataset.themeMode);
+    } else if (button.dataset.refreshMs !== undefined) {
+      const interval = Number(button.dataset.refreshMs);
+      setAutoRefresh(interval > 0, interval || state.autoRefreshMs);
     } else if (button.id === "menuBtn") {
       $("#sidebar").classList.toggle("open");
     } else if (button.dataset.trafficRange) {
@@ -1957,6 +2081,12 @@ document.addEventListener("click", async (eventObj) => {
     } else if (button.dataset.trafficView) {
       state.trafficView = button.dataset.trafficView === "table" ? "table" : "chart";
       renderStats();
+    } else if (button.dataset.trafficMetric) {
+      state.trafficMetric = ["rate", "delta", "total"].includes(button.dataset.trafficMetric) ? button.dataset.trafficMetric : "rate";
+      renderStats();
+    } else if (button.dataset.sitePreset) {
+      state.selectedSitePreset = button.dataset.sitePreset;
+      renderSiteSettings();
     } else if (button.dataset.userTraffic) {
       selectUserTraffic(button.dataset.userTraffic, { scroll: true });
     } else if (button.dataset.userQr) {
@@ -2000,6 +2130,21 @@ document.addEventListener("click", async (eventObj) => {
 });
 
 document.addEventListener("change", (eventObj) => {
+  if (eventObj.target.id === "trafficSmooth") {
+    state.trafficSmooth = eventObj.target.checked;
+    renderStats();
+    return;
+  }
+  if (eventObj.target.id === "trafficProxySeries" || eventObj.target.id === "trafficSiteSeries") {
+    state.trafficProxySeries = $("#trafficProxySeries").checked;
+    state.trafficSiteSeries = $("#trafficSiteSeries").checked;
+    if (!state.trafficProxySeries && !state.trafficSiteSeries) {
+      state.trafficProxySeries = true;
+      $("#trafficProxySeries").checked = true;
+    }
+    renderStats();
+    return;
+  }
   const input = eventObj.target.closest("[data-toggle-user]");
   if (!input) return;
   input.disabled = true;
@@ -2020,6 +2165,14 @@ $("#addUserForm").addEventListener("submit", (eventObj) => {
   }
   input.value = "";
   addUser(name).catch((err) => toast(err.message));
+});
+$("#generalSettingsForm").addEventListener("submit", (eventObj) => {
+  eventObj.preventDefault();
+  saveGeneralSettings().catch((err) => toast(err.message));
+});
+$("#siteSettingsForm").addEventListener("submit", (eventObj) => {
+  eventObj.preventDefault();
+  saveSiteSettings().catch((err) => toast(err.message));
 });
 $("#userSearch").addEventListener("input", (eventObj) => {
   state.userSearch = eventObj.target.value || "";
@@ -2050,7 +2203,7 @@ $("#collectStatsBtn").addEventListener("click", collectStats);
 window.addEventListener("hashchange", () => setPage((location.hash || "#dashboard").slice(1), false));
 
 setPage((location.hash || "#dashboard").slice(1), false);
-setTheme(state.theme);
+setThemeMode(state.themeMode);
 renderEvents();
 syncAutoRefreshTimer();
 refreshAll();
