@@ -32,6 +32,14 @@ def load_server(tmpdir: Path):
 
 
 class AdminFeatureTests(unittest.TestCase):
+    def test_admin_version_comes_from_activated_release(self):
+        server = SERVER_PATH.read_text(encoding="utf-8")
+        index = INDEX_PATH.read_text(encoding="utf-8")
+        self.assertIn("def runtime_version(", server)
+        self.assertIn('INSTALL_DIR / "current" / "lib" / "common.sh"', server)
+        self.assertIn('"version": runtime_version(config)', server)
+        self.assertIn('aria-label="Расписание бекапов"', index)
+
     def test_system_metrics_are_safe_and_bounded(self):
         with tempfile.TemporaryDirectory() as raw:
             server = load_server(Path(raw))

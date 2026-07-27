@@ -50,6 +50,10 @@ BACKUP_RESTORE_LOG = Path(os.getenv("GOTELEGRAM_BACKUP_RESTORE_LOG", "/var/log/g
 HOST = os.getenv("GOTELEGRAM_ADMIN_HOST", "127.0.0.1")
 PORT = int(os.getenv("GOTELEGRAM_ADMIN_PORT", "1984"))
 VERSION = "2.7.1"  # fallback only; live value read from config.json
+RUNTIME_COMMON_PATHS = (
+    INSTALL_DIR / "current" / "lib" / "common.sh",
+    Path(__file__).resolve().parents[1] / "lib" / "common.sh",
+)
 USER_RE = re.compile(r"^[A-Za-z0-9_.-]{1,48}$")
 LANG_RE = re.compile(r"^(en|ru)$")
 SENSITIVE_CONFIG_KEYS = {"secret"}
@@ -1315,6 +1319,21 @@ def user_payload(
     return item
 
 
+def runtime_version(config: dict[str, Any] | None = None) -> str:
+    """Read the activated release version before falling back to saved state."""
+    pattern = re.compile(r'^GOTELEGRAM_VERSION="([^"]+)"\s*$')
+    for path in RUNTIME_COMMON_PATHS:
+        try:
+            for line in path.read_text(encoding="utf-8").splitlines():
+                match = pattern.match(line)
+                if match:
+                    return match.group(1)
+        except OSError:
+            continue
+    saved = config or {}
+    return str(saved.get("version") or saved.get("gotelegram_version") or VERSION)
+
+
 def overview_payload() -> dict[str, Any]:
     config = load_json(GOTELEGRAM_CONFIG, {}) or {}
     language = read_language(config)
@@ -1330,7 +1349,7 @@ def overview_payload() -> dict[str, Any]:
         "admin": service_status("gotelegram-admin"),
     }
     return {
-        "version": config.get("version") or config.get("gotelegram_version") or VERSION,
+        "version": runtime_version(config),
         "time": utc_now(),
         "language": language,
         "admin_bind": {"host": HOST, "port": PORT},
@@ -1350,7 +1369,7 @@ def overview_payload() -> dict[str, Any]:
 
 
 class AdminHandler(BaseHTTPRequestHandler):
-    server_version = f"goTelegramProAdmin/{VERSION}"
+    server_version = f"goTelegramAdmin/{VERSION}"
 
     def log_message(self, fmt: str, *args: Any) -> None:
         print("%s - %s" % (self.address_string(), fmt % args))
