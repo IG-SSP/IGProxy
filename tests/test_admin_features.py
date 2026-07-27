@@ -361,6 +361,25 @@ class AdminFeatureTests(unittest.TestCase):
         self.assertEqual(len(re.findall(r'^\s+\[".*?","#[0-9a-f]{6}","#[0-9a-f]{6}"', random_site, re.M)), 10)
         self.assertIn("Скопировать ссылку", random_site)
         self.assertIn("__PROXY_LINK__", random_site)
+        self.assertIn("margin-top:-20px", random_site)
+        self.assertIn(".float::before", random_site)
+
+    def test_dashboard_navigation_runtime_and_upload_ux(self):
+        html = INDEX_PATH.read_text(encoding="utf-8")
+        script = APP_JS_PATH.read_text(encoding="utf-8")
+        styles = (ROOT / "admin-web" / "static" / "styles.css").read_text(encoding="utf-8")
+
+        self.assertGreater(html.index('id="trafficInsights"'), html.index('id="trafficChart"'))
+        self.assertIn('data-dashboard-jump="traffic"', html)
+        self.assertIn('id="portHealthBadge"', html)
+        self.assertIn('id="customSiteDrop"', html)
+        self.assertIn('id="customSiteFileName"', html)
+        self.assertNotIn('{ key: "admin", label: "admin"', script)
+        self.assertIn("Что делать", script)
+        self.assertIn('data-restart="telemt"', script)
+        self.assertIn('eventObj.target.closest("[data-dashboard-jump]")', script)
+        self.assertIn(".events-list .event", styles)
+        self.assertIn("overflow-wrap: anywhere", styles)
 
     def test_counter_resets_are_counted_as_new_traffic(self):
         previous = os.environ.get("GOTELEGRAM_STATS_HISTORY")

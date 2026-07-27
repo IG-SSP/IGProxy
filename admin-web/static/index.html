@@ -11,7 +11,7 @@
       document.documentElement.dataset.theme = theme;
     }());
   </script>
-  <link rel="stylesheet" href="/styles.css?v=igproxy-0.6">
+  <link rel="stylesheet" href="/styles.css?v=igproxy-0.7">
 </head>
 <body>
   <div class="app-shell">
@@ -86,16 +86,21 @@
           </section>
 
           <section class="visual-overview">
-            <div>
-              <p class="eyebrow">IGProxy</p>
-              <h2 id="visualTitle">Port 443</h2>
+            <div class="port-overview-copy">
+              <div class="port-title-row">
+                <div>
+                  <p class="eyebrow">IGProxy · входной узел</p>
+                  <h2 id="visualTitle">Port 443</h2>
+                </div>
+                <span class="port-health-badge" id="portHealthBadge">Проверяем</span>
+              </div>
               <p id="visualText">Публичная точка входа и сервисы за ней.</p>
               <div class="port-facts">
-                <div><span>Публичный адрес</span><strong id="portPublicAddress">--</strong></div>
-                <div><span>Текущая скорость</span><strong id="portCurrentRate">--</strong></div>
-                <div><span>DC в сети</span><strong id="portNetworkDc">1</strong></div>
-                <div><span>Подключения</span><strong id="portConnections">0</strong></div>
-                <div><span>Активные IP</span><strong id="portActiveIps">0</strong></div>
+                <button type="button" class="port-fact" data-dashboard-jump="settings"><span>Публичный адрес</span><strong id="portPublicAddress">--</strong><small>Домен и точка входа</small></button>
+                <button type="button" class="port-fact" data-dashboard-jump="traffic"><span>Текущая скорость</span><strong id="portCurrentRate">--</strong><small>Открыть историю трафика</small></button>
+                <button type="button" class="port-fact" data-dashboard-jump="settings"><span>DC в сети</span><strong id="portNetworkDc">1</strong><small>Настроить число узлов</small></button>
+                <button type="button" class="port-fact" data-dashboard-jump="keys"><span>Подключения</span><strong id="portConnections">0</strong><small>Показать активные ключи</small></button>
+                <button type="button" class="port-fact" data-dashboard-jump="keys"><span>Активные IP</span><strong id="portActiveIps">0</strong><small>Посмотреть пользователей</small></button>
               </div>
             </div>
             <div class="port-map" id="port443Map">
@@ -111,7 +116,7 @@
           </section>
 
           <div class="metric-grid">
-            <article class="metric-card accent-blue">
+            <article class="metric-card accent-blue dashboard-link" data-dashboard-jump="settings" tabindex="0">
               <span>Сайт и прокси</span>
               <strong id="metricAvailability">--</strong>
               <small id="metricDomain">--</small>
@@ -120,17 +125,17 @@
                 <small id="siteStatus" class="metric-status">--</small>
               </div>
             </article>
-            <article class="metric-card accent-green">
+            <article class="metric-card accent-green dashboard-link" data-dashboard-jump="keys" tabindex="0">
               <span data-i18n="metricKeys">Keys</span>
               <strong id="metricUsers">0</strong>
               <small data-i18n="configuredUsers">configured users</small>
             </article>
-            <article class="metric-card accent-violet">
+            <article class="metric-card accent-violet dashboard-link" data-dashboard-jump="traffic" tabindex="0">
               <span data-i18n="metricProxyTraffic">Proxy Traffic</span>
               <strong id="metricProxyTraffic">0 B</strong>
               <small id="metricProxyPackets">0 packets</small>
             </article>
-            <article class="metric-card accent-amber">
+            <article class="metric-card accent-amber dashboard-link" data-dashboard-jump="traffic" tabindex="0">
               <span data-i18n="metricSiteTraffic">Site Traffic</span>
               <strong id="metricSiteTraffic">0 B</strong>
               <small id="metricSitePackets">0 packets</small>
@@ -219,8 +224,8 @@
                 </select>
               </label>
             </div>
-            <div id="trafficInsights" class="chart-insights" aria-live="polite"></div>
             <div id="trafficChart" class="traffic-chart"></div>
+            <div id="trafficInsights" class="chart-insights" aria-live="polite"></div>
             <div class="table-wrap" id="trafficTableWrap">
               <table>
                 <thead>
@@ -468,16 +473,24 @@
               <button type="submit">Опубликовать выбранный сайт</button>
             </form>
             <details class="custom-site-box">
-              <summary>Загрузить свою страницу</summary>
-              <p>Поддерживается один автономный HTML-файл до 512 КБ. В ссылке главной кнопки оставьте плейсхолдер <code>__PROXY_LINK__</code>.</p>
-              <form id="customSiteForm" class="settings-form">
-                <label>HTML-файл
+              <summary><span class="custom-site-summary-icon">↥</span><span>Загрузить свою страницу<small>Автономный HTML до 512 КБ</small></span></summary>
+              <div class="custom-site-intro">
+                <strong>Собственная витрина</strong>
+                <p>Оставьте <code>__PROXY_LINK__</code> в ссылке главной кнопки — IGProxy подставит выбранный ключ при публикации.</p>
+              </div>
+              <form id="customSiteForm" class="custom-site-form">
+                <label class="custom-file-drop" id="customSiteDrop" for="customSiteFile">
                   <input id="customSiteFile" type="file" accept=".html,text/html" required>
+                  <span class="custom-file-icon">HTML</span>
+                  <strong>Выберите HTML-файл</strong>
+                  <small id="customSiteFileName">или перетащите его сюда · до 512 КБ</small>
                 </label>
-                <label>Ключ для кнопки
+                <div class="custom-site-publish">
+                  <label>Ключ для кнопки
                   <select id="customSiteKey"></select>
-                </label>
-                <button type="submit">Опубликовать свой HTML</button>
+                  </label>
+                  <button type="submit">Проверить и опубликовать</button>
+                </div>
               </form>
               <details class="prompt-example">
                 <summary>Пример промта для генерации страницы</summary>
@@ -503,6 +516,6 @@
       <button id="qrCopyBtn" type="button" class="soft" data-i18n="copyLink">Copy link</button>
     </div>
   </div>
-  <script src="/app.js?v=igproxy-0.6" type="module"></script>
+  <script src="/app.js?v=igproxy-0.7" type="module"></script>
 </body>
 </html>

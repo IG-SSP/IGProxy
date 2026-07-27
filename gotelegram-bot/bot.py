@@ -108,7 +108,7 @@ def _read_gotelegram_version() -> str:
                 return str(_v)
     except Exception:
         pass
-    return "2.9.2"
+    return "2.10.0"
 
 
 GOTELEGRAM_VERSION = _read_gotelegram_version()
@@ -592,6 +592,22 @@ def get_main_menu(user_id: Optional[int] = None) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(buttons)
 
 
+def main_menu_text() -> str:
+    """Return the compact Russian-only management introduction."""
+    return (
+        "<b>IGProxy</b>\n"
+        "<i>Управление прокси</i>\n\n"
+        "Этот бот управляет MTProxy:\n"
+        "— ключами\n"
+        "— нагрузкой и трафиком\n"
+        "— службами и бекапами\n"
+        "— локальной веб‑админкой\n\n"
+        "Основано на ядре <b>telemt</b>.\n"
+        "Сделано <b>ИГ</b>.\n\n"
+        "Выберите действие:"
+    )
+
+
 def get_closed_menu_keyboard() -> ReplyKeyboardMarkup:
     """A persistent launcher shown only while the inline management menu is closed."""
     return ReplyKeyboardMarkup(
@@ -653,14 +669,7 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         return
 
     await hide_closed_menu_keyboard(update)
-    welcome = (
-        f"<b>IGProxy · Управление прокси</b>\n\n"
-        "Этот бот управляет MTProxy: ключами, нагрузкой, трафиком, "
-        "службами, бекапами и локальной веб‑админкой.\n\n"
-        "Основано на ядре <b>telemt</b>.\n"
-        "Сделано <b>ИГ</b>.\n\n"
-        "Выберите действие:"
-    )
+    welcome = main_menu_text()
     previous_id = context.user_data.pop("main_menu_message_id", None)
     if previous_id:
         try:
@@ -2733,52 +2742,42 @@ async def cb_menu_admin_web(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     running = await check_service_status(ADMIN_WEB_SERVICE)
     host = await admin_web_host_hint()
     local_url = f"http://127.0.0.1:{ADMIN_WEB_PORT}/"
-    ssh_cmd = (
-        f"ssh -N -L 127.0.0.1:{ADMIN_WEB_PORT}:"
-        f"127.0.0.1:{ADMIN_WEB_PORT} root@{host}"
+    status = "запущена" if running else "не запущена"
+    text = (
+        "<b>🖥 Веб-админка</b>\n\n"
+        f"Статус: <code>{status}</code>\n\n"
+        "Выберите удобный способ подключения:\n"
+        "— <b>Termius</b>: включите сохранённое правило Local tunnel;\n"
+        "— <b>обычный SSH</b>: запустите готовую команду в терминале.\n\n"
+        "Админка доступна только через защищённый локальный туннель."
     )
 
-    if get_user_lang(user_id) == "ru":
-        status = "запущена" if running else "не запущена"
-        text = (
-            f"<b>🖥 Веб-админка</b>\n\n"
-            f"Статус: <code>{status}</code>\n\n"
-            "<b>Termius</b>\n"
-            "1. Откройте сервер → Port Forwarding.\n"
-            f"2. Добавьте Local tunnel: <code>127.0.0.1:{ADMIN_WEB_PORT}</code> → "
-            f"<code>127.0.0.1:{ADMIN_WEB_PORT}</code> через свой VPS.\n"
-            "3. Сохраните правило и обязательно нажмите на него — так туннель запустится.\n"
-            "4. Откройте админку кнопкой под сообщением.\n\n"
-            "<b>Обычный SSH</b>\n"
-            f"<code>{html.escape(ssh_cmd)}</code>\n\n"
-            "Админка слушает только localhost на сервере и не публикуется наружу."
-        )
-    else:
-        status = "running" if running else "not running"
-        text = (
-            f"<b>🖥 Web Admin</b>\n\n"
-            f"Status: <code>{status}</code>\n\n"
-            "<b>Termius</b>\n"
-            "1. Open the server → Port Forwarding.\n"
-            f"2. Add a Local tunnel: <code>127.0.0.1:{ADMIN_WEB_PORT}</code> → "
-            f"<code>127.0.0.1:{ADMIN_WEB_PORT}</code>.\n"
-            "3. Start the tunnel and open:\n"
-            f"<code>{html.escape(local_url)}</code>\n\n"
-            "<b>Regular SSH</b>\n"
-            f"<code>{html.escape(ssh_cmd)}</code>\n\n"
-            "The admin listens only on server localhost and is not exposed publicly."
-        )
+    previous_guide_id = context.user_data.pop("admin_web_guide_message_id", None)
+    if previous_guide_id:
+        try:
+            await context.bot.delete_message(update.effective_chat.id, previous_guide_id)
+        except TelegramError:
+            pass
 
     await safe_edit_message(
         query,
         text,
         reply_markup=InlineKeyboardMarkup([
             [InlineKeyboardButton("Открыть веб-админку", url=local_url)],
+            [
+                InlineKeyboardButton("Схема Termius", callback_data="admin_web_termius"),
+                InlineKeyboardButton("Команда SSH", callback_data="admin_web_ssh"),
+            ],
             [InlineKeyboardButton(_t(user_id, "btn_back"), callback_data="menu_main")],
         ]),
         parse_mode="HTML",
         disable_web_page_preview=True,
     )
+
+
+async def cb_admin_web_termius(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    await query.answer()
     if ADMIN_WEB_GUIDE.exists() and query.message:
         try:
             previous_guide_id = context.user_data.pop("admin_web_guide_message_id", None)
@@ -2791,14 +2790,60 @@ async def cb_menu_admin_web(update: Update, context: ContextTypes.DEFAULT_TYPE) 
                 guide = await query.message.reply_photo(
                     photo=guide_file,
                     caption=(
-                        "Termius → Port Forwarding → Local. В поле Intermediate host "
-                        "выберите свой VPS. После сохранения нажмите на созданное правило, "
-                        "чтобы запустить туннель."
+                        "Заполните поля как на схеме, а в Intermediate host выберите свой VPS. "
+                        "Сохраните правило и нажмите на него, чтобы включить туннель."
                     ),
+                    reply_markup=InlineKeyboardMarkup([
+                        [InlineKeyboardButton(
+                            "Открыть веб-админку",
+                            url=f"http://127.0.0.1:{ADMIN_WEB_PORT}/",
+                        )],
+                        [InlineKeyboardButton(
+                            "Готово — удалить инструкцию",
+                            callback_data="admin_web_guide_delete",
+                        )],
+                    ]),
                 )
             context.user_data["admin_web_guide_message_id"] = guide.message_id
+            asyncio.create_task(_delete_message_after(guide, 600))
         except TelegramError as exc:
             logger.warning("Failed to send Termius guide: %s", exc)
+
+
+async def cb_admin_web_guide_delete(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    await query.answer("Инструкция удалена")
+    context.user_data.pop("admin_web_guide_message_id", None)
+    try:
+        await query.message.delete()
+    except TelegramError:
+        pass
+
+
+async def cb_admin_web_ssh(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    await query.answer()
+    host = await admin_web_host_hint()
+    local_url = f"http://127.0.0.1:{ADMIN_WEB_PORT}/"
+    ssh_cmd = (
+        f"ssh -N -L 127.0.0.1:{ADMIN_WEB_PORT}:"
+        f"127.0.0.1:{ADMIN_WEB_PORT} root@{host}"
+    )
+    await safe_edit_message(
+        query,
+        (
+            "<b>⌨️ Подключение через SSH</b>\n\n"
+            "Скопируйте и запустите команду в терминале:\n\n"
+            f"<code>{html.escape(ssh_cmd)}</code>\n\n"
+            "Пока команда работает, откройте админку кнопкой ниже."
+        ),
+        reply_markup=InlineKeyboardMarkup([
+            [InlineKeyboardButton("Открыть веб-админку", url=local_url)],
+            [InlineKeyboardButton("Назад к способам", callback_data="menu_admin_web")],
+        ]),
+        parse_mode="HTML",
+        disable_web_page_preview=True,
+    )
 
 
 # ============================================================================
@@ -3009,12 +3054,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     if data == "menu_main":
         await query.answer()
         buttons = get_main_menu(user_id)
-        text = (
-            "<b>IGProxy · Управление прокси</b>\n\n"
-            "Ключи, состояние, трафик, службы, бекапы и веб‑админка.\n"
-            "Основано на <b>telemt</b> · сделано <b>ИГ</b>.\n\n"
-            "Выберите действие:"
-        )
+        text = main_menu_text()
         await safe_edit_message(query, text, reply_markup=buttons, parse_mode="HTML")
         return
 
@@ -3039,6 +3079,9 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         "menu_logs": cb_menu_logs,
         "menu_backup": cb_menu_backup,
         "menu_admin_web": cb_menu_admin_web,
+        "admin_web_termius": cb_admin_web_termius,
+        "admin_web_guide_delete": cb_admin_web_guide_delete,
+        "admin_web_ssh": cb_admin_web_ssh,
         "menu_admins": cb_menu_admins,
         "menu_users": cb_menu_users,
         "backup_create": cb_backup_create,
@@ -3093,10 +3136,7 @@ async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE
             except TelegramError:
                 pass
         sent = await update.message.reply_text(
-            "<b>IGProxy · Управление прокси</b>\n\n"
-            "Ключи, состояние, трафик, службы, бекапы и веб‑админка.\n"
-            "Основано на <b>telemt</b> · сделано <b>ИГ</b>.\n\n"
-            "Выберите действие:",
+            main_menu_text(),
             reply_markup=get_main_menu(user_id),
             parse_mode="HTML",
         )

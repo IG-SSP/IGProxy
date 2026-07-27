@@ -790,25 +790,30 @@ function healthLabel(health) {
 }
 
 function renderServices(services = {}) {
+  const site = state.overview?.site_status || {};
+  const runtimeOk = Boolean(runtimeData());
   const items = [
-    { key: "telemt", label: "telemt", api: "telemt" },
-    { key: "nginx", label: "nginx", api: "nginx" },
-    { key: "bot", label: "bot", api: "gotelegram-bot" },
-    { key: "stats", label: "stats", api: "gotelegram-stats" },
-    { key: "admin", label: "admin", api: "gotelegram-admin" },
+    { key: "telemt", label: "MTProxy · telemt", api: "telemt", restart: true },
+    { key: "nginx", label: "Публичный сайт · nginx", api: "nginx", restart: true },
+    { key: "bot", label: "Telegram-бот", api: "gotelegram-bot", restart: true },
+    { key: "stats", label: "Сбор статистики", api: "gotelegram-stats", restart: true },
+    { key: "site", label: "Доступность сайта", status: site.ok ? "running" : (site.checked ? "failed" : "unknown") },
+    { key: "runtime", label: "telemt API", status: runtimeOk ? "running" : "failed" },
   ];
   const html = items.map((item) => {
-    const status = services[item.key] || "unknown";
-    const disabled = item.key === "admin" || status === "not_installed";
+    const status = item.status || services[item.key] || "unknown";
+    const disabled = !item.restart || status === "not_installed";
     return `<article class="service status-${escapeAttr(status)}">
       <div>
         <strong>${escapeHtml(item.label)}</strong>
         <span><i></i>${escapeHtml(statusLabel(status))}</span>
       </div>
-      <button class="soft" data-restart="${escapeAttr(item.api)}" ${disabled ? "disabled" : ""}>${escapeHtml(t("restart"))}</button>
+      ${item.restart
+        ? `<button class="soft" data-restart="${escapeAttr(item.api)}" ${disabled ? "disabled" : ""}>${escapeHtml(t("restart"))}</button>`
+        : `<button class="soft" data-dashboard-jump="${item.key === "site" ? "settings" : "logs"}">Подробнее</button>`}
     </article>`;
   }).join("");
-  stableHtml($("#services"), html, JSON.stringify(services));
+  stableHtml($("#services"), html, JSON.stringify([services, site.ok, runtimeOk]));
 }
 
 function runtimeData() {
@@ -851,7 +856,12 @@ function renderRuntime() {
     protocol: "Ошибка протокола или несовместимый клиент.",
     unknown: "Ядро не смогло точнее классифицировать причину.",
   };
-  stableHtml($("#runtimeIssues"), bad.length ? `
+  const advice = badRatio >= 20
+    ? "Доля ошибок высокая: сначала откройте логи telemt, затем проверьте доступность Telegram DC. Перезапуск используйте, если ошибки продолжают расти."
+    : badRatio >= 5
+      ? "Есть заметные сбои. Сопоставьте их время с графиком трафика и журналом telemt."
+      : "Ядро работает стабильно. Если клиенты жалуются на доступ, проверьте конкретный ключ и его активные IP.";
+  const issues = bad.length ? `
     <div class="runtime-issues-head"><strong>Причины сбоев</strong><span>накопительно с запуска</span></div>
     ${bad.slice().sort((a, b) => Number(b.total || 0) - Number(a.total || 0)).slice(0, 6).map((item) => {
       const rawClass = String(item.class || "unknown");
@@ -861,7 +871,16 @@ function renderRuntime() {
         <div><strong>${escapeHtml(rawClass)}</strong><small>${escapeHtml(explanations[key])}</small></div>
         <div class="issue-value"><strong>${escapeHtml(item.total ?? 0)}</strong><span style="--issue-share:${share}%"></span></div>
       </div>`;
-    }).join("")}` : `<div class="runtime-clean">Ошибок по классам нет</div>`, JSON.stringify([bad, badTotal]));
+    }).join("")}` : `<div class="runtime-clean">Ошибок по классам нет</div>`;
+  stableHtml($("#runtimeIssues"), `${issues}
+    <div class="runtime-advice">
+      <div><strong>Что делать</strong><p>${escapeHtml(advice)}</p></div>
+      <div class="runtime-actions">
+        <button class="soft" data-dashboard-jump="logs">Открыть логи telemt</button>
+        <button class="soft" data-dashboard-jump="traffic">Сверить с трафиком</button>
+        <button class="soft danger-soft" data-restart="telemt">Перезапустить telemt</button>
+      </div>
+    </div>`, JSON.stringify([bad, badTotal, advice]));
 }
 
 function siteStatusText(site = {}) {
@@ -896,7 +915,9 @@ function renderSiteStatus() {
 }
 
 function renderOperationsSummary() {
-  const services = state.overview?.services || {};
+  const services = Object.fromEntries(
+    Object.entries(state.overview?.services || {}).filter(([name]) => name !== "admin")
+  );
   const system = state.overview?.system || {};
   const running = Object.values(services).filter((status) => status === "running").length;
   const totalServices = Object.keys(services).length;
@@ -936,12 +957,18 @@ function renderPort443(payload = {}) {
   if (payload.error) {
     summary.textContent = t("port443Error");
     summary.className = "port-status error";
+    $("#portHealthBadge").textContent = "Ошибка";
+    $("#portHealthBadge").className = "port-health-badge error";
   } else if (!listeners.length) {
     summary.textContent = t("port443NoListeners");
     summary.className = "port-status warn";
+    $("#portHealthBadge").textContent = "Нет слушателя";
+    $("#portHealthBadge").className = "port-health-badge warn";
   } else {
     summary.textContent = `${listeners.length} ${t("port443Listeners")}${routes.length ? ` · ${routes.length} ${t("port443Routes")}` : ""}`;
     summary.className = "port-status ok";
+    $("#portHealthBadge").textContent = routes.length ? "Прокси и сайт работают" : "Прокси работает";
+    $("#portHealthBadge").className = "port-health-badge ok";
   }
   const listenerHtml = listeners.length ? listeners.map((item) => {
     const title = `${item.proto || ""} ${item.address || ""} · ${item.process || "unknown"}${item.pid ? ` · pid ${item.pid}` : ""}`;
@@ -1639,7 +1666,7 @@ function renderEvents() {
   box.innerHTML = state.events.map((item) => `
     <div class="event">
       <strong>${escapeHtml(item.title)}</strong>
-      <small>${escapeHtml(item.detail || item.time.toLocaleTimeString())}</small>
+      <small title="${escapeAttr(item.detail || "")}">${escapeHtml(item.detail || item.time.toLocaleTimeString())}</small>
     </div>
   `).join("");
 }
@@ -1715,6 +1742,8 @@ async function saveCustomSite() {
     state.selectedSitePreset = "custom";
     renderSiteSettings();
     $("#customSiteFile").value = "";
+    $("#customSiteDrop").classList.remove("is-ready");
+    $("#customSiteFileName").textContent = "или перетащите его сюда · до 512 КБ";
     toast("Свой сайт опубликован");
     await refreshAll({ silent: true });
   } finally {
@@ -2157,6 +2186,11 @@ async function copyText(value) {
 }
 
 document.addEventListener("click", async (eventObj) => {
+  const jump = eventObj.target.closest("[data-dashboard-jump]");
+  if (jump) {
+    setPage(jump.dataset.dashboardJump);
+    return;
+  }
   const nav = eventObj.target.closest("[data-nav]");
   if (nav) {
     setPage(nav.dataset.nav);
@@ -2231,6 +2265,14 @@ document.addEventListener("click", async (eventObj) => {
 });
 
 document.addEventListener("change", (eventObj) => {
+  if (eventObj.target.id === "customSiteFile") {
+    const file = eventObj.target.files?.[0];
+    $("#customSiteDrop").classList.toggle("is-ready", Boolean(file));
+    $("#customSiteFileName").textContent = file
+      ? `${file.name} · ${fmtBytes(file.size)}`
+      : "или перетащите его сюда · до 512 КБ";
+    return;
+  }
   if (eventObj.target.id === "trafficSmooth") {
     state.trafficSmooth = eventObj.target.checked;
     renderStats();
@@ -2269,6 +2311,34 @@ document.addEventListener("change", (eventObj) => {
     input.disabled = false;
     toast(err.message);
   });
+});
+
+document.addEventListener("keydown", (eventObj) => {
+  const jump = eventObj.target.closest(".dashboard-link[data-dashboard-jump]");
+  if (!jump || !["Enter", " "].includes(eventObj.key)) return;
+  eventObj.preventDefault();
+  setPage(jump.dataset.dashboardJump);
+});
+
+["dragenter", "dragover"].forEach((eventName) => {
+  $("#customSiteDrop").addEventListener(eventName, (eventObj) => {
+    eventObj.preventDefault();
+    $("#customSiteDrop").classList.add("is-dragging");
+  });
+});
+["dragleave", "drop"].forEach((eventName) => {
+  $("#customSiteDrop").addEventListener(eventName, (eventObj) => {
+    eventObj.preventDefault();
+    $("#customSiteDrop").classList.remove("is-dragging");
+  });
+});
+$("#customSiteDrop").addEventListener("drop", (eventObj) => {
+  const file = eventObj.dataTransfer?.files?.[0];
+  if (!file) return;
+  const transfer = new DataTransfer();
+  transfer.items.add(file);
+  $("#customSiteFile").files = transfer.files;
+  $("#customSiteFile").dispatchEvent(new Event("change", { bubbles: true }));
 });
 
 $("#addUserForm").addEventListener("submit", (eventObj) => {

@@ -52,7 +52,7 @@ SITE_PRESETS_DIR = Path(os.getenv("GOTELEGRAM_SITE_PRESETS", "/opt/gotelegram/cu
 
 HOST = os.getenv("GOTELEGRAM_ADMIN_HOST", "127.0.0.1")
 PORT = int(os.getenv("GOTELEGRAM_ADMIN_PORT", "1984"))
-VERSION = "2.9.2"  # fallback only; live value read from config.json
+VERSION = "2.10.0"  # fallback only; live value read from config.json
 RUNTIME_COMMON_PATHS = (
     INSTALL_DIR / "current" / "lib" / "common.sh",
     Path(__file__).resolve().parents[1] / "lib" / "common.sh",

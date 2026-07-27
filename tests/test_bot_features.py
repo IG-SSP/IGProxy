@@ -81,7 +81,10 @@ class BotFeatureTests(unittest.TestCase):
         self.assertIn("ssh -N -L 127.0.0.1:", source)
         self.assertIn("termius-port-forwarding.png", source)
         self.assertIn("reply_photo", source)
-        self.assertIn("обязательно нажмите на него", source)
+        self.assertIn("нажмите на него, чтобы включить туннель", source)
+        self.assertIn('callback_data="admin_web_termius"', source)
+        self.assertIn('callback_data="admin_web_guide_delete"', source)
+        self.assertIn("_delete_message_after(guide, 600)", source)
         self.assertIn('InlineKeyboardButton("Открыть веб-админку"', source)
 
     def test_bot_has_persistent_launcher_and_tme_links(self):
@@ -89,7 +92,9 @@ class BotFeatureTests(unittest.TestCase):
         self.assertIn("get_closed_menu_keyboard", source)
         self.assertIn('"Открыть Управление"', source)
         self.assertIn("ReplyKeyboardRemove", source)
-        self.assertIn("<b>IGProxy · Управление прокси</b>", source)
+        self.assertIn('"<b>IGProxy</b>\\n"', source)
+        self.assertIn('"<i>Управление прокси</i>\\n\\n"', source)
+        self.assertIn('"— ключами\\n"', source)
         self.assertIn("https://t.me/proxy?server=", source)
         self.assertNotIn('return f"tg://proxy?server=', source)
 
