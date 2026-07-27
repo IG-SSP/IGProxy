@@ -358,11 +358,18 @@ class AdminFeatureTests(unittest.TestCase):
         self.assertIn("apply_custom_site", server)
         self.assertIn("/api/site/custom", server)
         self.assertIn('id="customSiteForm"', html)
-        self.assertEqual(len(re.findall(r'^\s+\[".*?","#[0-9a-f]{6}","#[0-9a-f]{6}"', random_site, re.M)), 10)
+        self.assertEqual(
+            len(re.findall(r'^\s+\["(?:editorial|transit|cartography|terminal|botanical|postcard|tearoom|beacon|poster|playground)"', random_site, re.M)),
+            10,
+        )
         self.assertIn("Скопировать ссылку", random_site)
         self.assertIn("__PROXY_LINK__", random_site)
-        self.assertIn("margin-top:-20px", random_site)
-        self.assertIn(".float::before", random_site)
+        self.assertIn("__LAYOUT__", random_site)
+        self.assertIn("margin-top:-24px", random_site)
+        self.assertIn(".tag::before", random_site)
+        self.assertEqual(len(re.findall(r"/\* \d{2} —", random_site)), 10)
+        for layout in ("editorial", "transit", "cartography", "terminal", "botanical", "postcard", "tearoom", "beacon", "poster", "playground"):
+            self.assertIn(f'"layout": "{layout}"', server)
 
     def test_dashboard_navigation_runtime_and_upload_ux(self):
         html = INDEX_PATH.read_text(encoding="utf-8")
@@ -420,6 +427,25 @@ class AdminFeatureTests(unittest.TestCase):
             self.assertNotIn("__PROXY_LINK__", index)
             self.assertEqual(payload["preset"], "glass-garden")
             self.assertTrue(server.WEBSITE_ROOT.stat().st_mode & 0o005)
+
+    def test_fixed_story_preset_selects_its_own_visual_layout(self):
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            config = root / "etc" / "telemt" / "config.toml"
+            config.parent.mkdir(parents=True)
+            config.write_text(
+                '[access.users]\nmain = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"\n',
+                encoding="utf-8",
+            )
+            server = load_server(root)
+            with mock.patch.object(server, "proxy_link", return_value="https://t.me/proxy?test=1"):
+                payload = server.apply_site_preset("story-transit", "main")
+
+            index = (server.WEBSITE_ROOT / "index.html").read_text(encoding="utf-8")
+            self.assertIn('const requested="transit"', index)
+            self.assertNotIn("__LAYOUT__", index)
+            self.assertIn("https://t.me/proxy?test=1", index)
+            self.assertEqual(payload["preset"], "story-transit")
 
     def test_get_config_value_secret_accepts_quoted_main_user(self):
         with tempfile.TemporaryDirectory() as raw:

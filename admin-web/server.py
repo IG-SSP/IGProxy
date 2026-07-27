@@ -214,8 +214,70 @@ def public_config(config: dict[str, Any]) -> dict[str, Any]:
 
 SITE_PRESETS = {
     "random-gallery": {
-        "name": "Десять случайных басен",
-        "description": "Лёгкая витрина без внешних файлов: одна из десяти историй выбирается при открытии.",
+        "name": "Случайная из 10 витрин",
+        "description": "При каждом открытии выбирается самостоятельная композиция со своим стилем.",
+        "source": "random-gallery",
+        "layout": "auto",
+    },
+    "story-editorial": {
+        "name": "Ночная редакция",
+        "description": "Светлая газетная обложка с крупной антиквой и заметками на полях.",
+        "source": "random-gallery",
+        "layout": "editorial",
+    },
+    "story-transit": {
+        "name": "Лунное депо",
+        "description": "Контрастное транспортное табло с маршрутной схемой и вагоном.",
+        "source": "random-gallery",
+        "layout": "transit",
+    },
+    "story-cartography": {
+        "name": "Картографы дождя",
+        "description": "Бумажная карта с координатами, штампами и новой линией маршрута.",
+        "source": "random-gallery",
+        "layout": "cartography",
+    },
+    "story-terminal": {
+        "name": "Тихая мастерская",
+        "description": "Инженерный терминал с зелёным свечением и журналом маршрута.",
+        "source": "random-gallery",
+        "layout": "terminal",
+    },
+    "story-botanical": {
+        "name": "Оранжерея мостов",
+        "description": "Мягкий ботанический атлас с органическими формами и гербарием.",
+        "source": "random-gallery",
+        "layout": "botanical",
+    },
+    "story-postcard": {
+        "name": "Облачная почта",
+        "description": "Воздушная почтовая открытка с марками, конвертом и чистым небом.",
+        "source": "random-gallery",
+        "layout": "postcard",
+    },
+    "story-tearoom": {
+        "name": "Чайная у перевала",
+        "description": "Тёплое меню старой чайной с картой второго перевала.",
+        "source": "random-gallery",
+        "layout": "tearoom",
+    },
+    "story-beacon": {
+        "name": "Бумажный маяк",
+        "description": "Морская сигнальная панель с сильной геометрией и лучом маяка.",
+        "source": "random-gallery",
+        "layout": "beacon",
+    },
+    "story-poster": {
+        "name": "Оркестр обходных нот",
+        "description": "Яркий музыкальный постер с типографикой и ритмичными формами.",
+        "source": "random-gallery",
+        "layout": "poster",
+    },
+    "story-playground": {
+        "name": "Сад воздушных троп",
+        "description": "Игровая иллюстрация с улиткой, мягкими карточками и тропой.",
+        "source": "random-gallery",
+        "layout": "playground",
     },
     "route-workshop": {
         "name": "Маршрутная мастерская",
@@ -239,7 +301,14 @@ def site_settings_payload() -> dict[str, Any]:
         "preset": str(config.get("site_preset") or "random-gallery"),
         "key": str(config.get("site_key") or ("main" if "main" in records else "")),
         "presets": [
-            {"id": key, **value, "available": (SITE_PRESETS_DIR / key / "index.html").exists()}
+            {
+                "id": key,
+                "name": value["name"],
+                "description": value["description"],
+                "available": (
+                    SITE_PRESETS_DIR / str(value.get("source") or key) / "index.html"
+                ).exists(),
+            }
             for key, value in SITE_PRESETS.items()
         ],
         "keys": [
@@ -283,7 +352,8 @@ def apply_site_preset(preset: str, key_name: str) -> dict[str, Any]:
     if preset not in SITE_PRESETS:
         raise ValueError("unknown site preset")
     _, link = _enabled_site_key(key_name)
-    source = SITE_PRESETS_DIR / preset
+    definition = SITE_PRESETS[preset]
+    source = SITE_PRESETS_DIR / str(definition.get("source") or preset)
     if not (source / "index.html").is_file():
         raise FileNotFoundError("site preset is not installed")
     WEBSITE_ROOT.parent.mkdir(parents=True, exist_ok=True)
@@ -292,7 +362,11 @@ def apply_site_preset(preset: str, key_name: str) -> dict[str, Any]:
     try:
         shutil.copytree(source, stage, dirs_exist_ok=True)
         for page in stage.rglob("*.html"):
-            rendered = page.read_text(encoding="utf-8").replace("__PROXY_LINK__", link)
+            rendered = (
+                page.read_text(encoding="utf-8")
+                .replace("__PROXY_LINK__", link)
+                .replace("__LAYOUT__", str(definition.get("layout") or "auto"))
+            )
             page.write_text(rendered, encoding="utf-8")
         return _publish_site_stage(stage, preset, key_name)
     except Exception:
