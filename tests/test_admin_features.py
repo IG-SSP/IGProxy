@@ -370,11 +370,23 @@ class AdminFeatureTests(unittest.TestCase):
         self.assertIn("Скопировать ссылку", random_site)
         self.assertIn("__PROXY_LINK__", random_site)
         self.assertIn("__LAYOUT__", random_site)
-        self.assertIn("margin-top:-24px", random_site)
-        self.assertIn(".tag::before", random_site)
+        self.assertNotIn('class="tag tag-a"', random_site)
+        self.assertNotIn('class="tag tag-b"', random_site)
+        self.assertIn("height:100svh", random_site)
+        self.assertIn("overflow:hidden", random_site)
+        self.assertIn("@media(prefers-reduced-motion:reduce)", random_site)
         self.assertEqual(len(re.findall(r"/\* \d{2} —", random_site)), 10)
         for layout in ("editorial", "transit", "cartography", "terminal", "botanical", "postcard", "tearoom", "beacon", "poster", "playground"):
             self.assertIn(f'"layout": "{layout}"', server)
+        self.assertIn('"name": "Рандомный сайт"', server)
+
+    def test_all_public_sites_animate_and_fit_mobile_viewport(self):
+        for preset in ("route-workshop", "glass-garden", "open-library"):
+            source = (ROOT / "site-presets" / preset / "index.html").read_text(encoding="utf-8")
+            self.assertIn("@keyframes", source)
+            self.assertIn("height:100svh", source)
+            self.assertIn("overflow:hidden", source)
+            self.assertIn("@media(prefers-reduced-motion:reduce)", source)
 
     def test_dashboard_navigation_runtime_and_upload_ux(self):
         html = INDEX_PATH.read_text(encoding="utf-8")

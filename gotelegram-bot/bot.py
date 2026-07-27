@@ -108,7 +108,7 @@ def _read_gotelegram_version() -> str:
                 return str(_v)
     except Exception:
         pass
-    return "2.10.1"
+    return "2.10.2"
 
 
 GOTELEGRAM_VERSION = _read_gotelegram_version()
@@ -573,7 +573,7 @@ async def require_auth(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bo
 def get_main_menu(user_id: Optional[int] = None) -> InlineKeyboardMarkup:
     """Generate main menu keyboard localized for the given user."""
     buttons = [
-        [InlineKeyboardButton(_t(user_id, "menu_status"), callback_data="menu_status")],
+        [InlineKeyboardButton("🟢 Статус", callback_data="menu_status")],
         [
             InlineKeyboardButton(_t(user_id, "menu_users"), callback_data="menu_users"),
             InlineKeyboardButton(_t(user_id, "menu_stats"), callback_data="menu_stats"),
@@ -603,7 +603,7 @@ def main_menu_text() -> str:
         "— Службами и бекапами\n"
         "— Локальной веб‑админкой\n\n"
         "Основано на ядре <b>telemt</b>.\n"
-        "Сделано <b>ИГ</b>—\n\n"
+        "Сделано с любовью <b>ИГ</b>— 💓\n\n"
         "Выберите действие:"
     )
 
