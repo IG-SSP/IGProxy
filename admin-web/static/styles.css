@@ -453,6 +453,7 @@ h2 {
 .visual-overview h2 {
   margin-top: 4px;
   font-size: clamp(32px, 4vw, 46px);
+  white-space: nowrap;
 }
 
 .visual-overview p:not(.eyebrow) {
@@ -2268,7 +2269,7 @@ td small {
 
 .port-facts {
   display: grid;
-  grid-template-columns: repeat(5, minmax(110px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(125px, 1fr));
   gap: 10px;
   margin-top: 24px;
 }
@@ -2334,6 +2335,7 @@ td small {
 
 .port-title-row {
   display: flex;
+  flex-wrap: wrap;
   align-items: flex-start;
   justify-content: space-between;
   gap: 16px;
