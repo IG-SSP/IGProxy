@@ -96,12 +96,51 @@ installer_reserved_port_status 9091 telemt
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("публичная привязка", result.stdout)
 
+    def test_preflight_json_is_machine_readable(self):
+        result = run_bash(
+            """
+installer_preflight_collect() {
+  INSTALLER_PREFLIGHT_FATAL=0
+  INSTALLER_PF_OS='Test "Linux"'
+  INSTALLER_PF_ARCH=amd64
+  INSTALLER_PF_MEMORY_MB=512
+  INSTALLER_PF_DISK_MB=2048
+  INSTALLER_PF_INODE_FREE=90
+  INSTALLER_PF_IP=203.0.113.1
+  INSTALLER_PF_PORT80=свободен
+  INSTALLER_PF_PORT443=занят
+  INSTALLER_PF_RECOMMENDED_PORT=9443
+  INSTALLER_PF_ADMIN=свободен
+  INSTALLER_PF_METRICS=свободен
+  INSTALLER_PF_API=свободен
+  INSTALLER_PF_FIREWALL='не обнаружен'
+  INSTALLER_PF_EXISTING=нет
+}
+installer_preflight_json
+"""
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        import json
+        payload = json.loads(result.stdout)
+        self.assertTrue(payload["ready"])
+        self.assertEqual(payload["recommended_proxy_port"], "9443")
+        self.assertEqual(payload["os"], 'Test "Linux"')
+
+    def test_mode_picker_keeps_prompt_visible_and_stdout_machine_clean(self):
+        result = run_bash("printf '2\\n' | installer_choose_mode")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout.strip(), "lite")
+        self.assertIn("Что установить?", result.stderr)
+
     def test_operator_installation_is_russian_only(self):
         install = INSTALL.read_text(encoding="utf-8")
         self.assertIn('load_language "ru"', install)
         self.assertNotIn("    first_run_language_picker\n", install)
         self.assertIn("installer_choose_mode", install)
         self.assertIn("installer_preflight_run", install)
+        self.assertIn("--check-json", install)
+        self.assertIn("--dry-run", install)
+        self.assertIn("Это был предварительный просмотр: система не изменялась.", install)
 
     def test_pro_mode_uses_selected_public_and_internal_ports(self):
         install = INSTALL.read_text(encoding="utf-8")

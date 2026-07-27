@@ -2076,13 +2076,43 @@ _bot_action_dispatch_locked() {
     esac
 }
 
+installer_dry_run() {
+    check_root
+    installer_preflight_run || return 1
+
+    local selected_mode public_port domain="" internal_port=""
+    selected_mode=$(installer_choose_mode) || return 1
+    public_port=$(installer_choose_public_port) || return 1
+
+    if [ "$selected_mode" = "pro" ]; then
+        echo ""
+        echo -ne "  Домен для сайта: "
+        read -r domain
+        domain=$(printf '%s' "$domain" | tr -d '[:space:]')
+        installer_domain_preflight "$domain" || return 1
+        internal_port=$(installer_pick_internal_port "$public_port") || {
+            log_error "Не найден свободный локальный порт для сайта."
+            return 1
+        }
+    fi
+
+    installer_show_apply_plan "$selected_mode" "$public_port" "$domain" "$internal_port"
+    echo ""
+    log_success "Проверка завершена. Это был предварительный просмотр: система не изменялась."
+}
+
 # ── Точка входа / Entry point ───────────────────────────────────────────────
 main() {
     # Non-interactive action mode: if --action=X is in args, dispatch and exit.
     # Must run BEFORE interactive banner/menus so the bot gets clean JSON.
-    local a has_action=0
+    local a has_action=0 inspection_mode=""
     for a in "$@"; do
-        case "$a" in --action=*) has_action=1; break ;; esac
+        case "$a" in
+            --action=*) has_action=1 ;;
+            --check) inspection_mode="check" ;;
+            --check-json) inspection_mode="check-json" ;;
+            --dry-run) inspection_mode="dry-run" ;;
+        esac
     done
     if [ "$has_action" = "1" ]; then
         check_root
@@ -2095,6 +2125,24 @@ main() {
         auto_migrate_legacy_state >&2 || true
         bot_action_dispatch "$@"
         exit $?
+    fi
+    if [ -n "$inspection_mode" ]; then
+        case "$inspection_mode" in
+            check)
+                check_root
+                installer_preflight_run
+                exit $?
+                ;;
+            check-json)
+                check_root >/dev/null
+                installer_preflight_json
+                exit $?
+                ;;
+            dry-run)
+                installer_dry_run
+                exit $?
+                ;;
+        esac
     fi
 
     # bootstrap (exec bash) / curl|bash: stdin может быть не tty -> перецепляем на

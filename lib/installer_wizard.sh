@@ -247,6 +247,35 @@ installer_preflight_run() {
     return 0
 }
 
+installer_json_escape() {
+    printf '%s' "${1:-}" | tr '\r\n' '  ' | sed \
+        -e 's/\\/\\\\/g' \
+        -e 's/"/\\"/g'
+}
+
+installer_preflight_json() {
+    installer_preflight_collect
+    printf '{'
+    printf '"ready":%s,' "$([ "$INSTALLER_PREFLIGHT_FATAL" -eq 0 ] && printf true || printf false)"
+    printf '"fatal_count":%s,' "$INSTALLER_PREFLIGHT_FATAL"
+    printf '"os":"%s",' "$(installer_json_escape "$INSTALLER_PF_OS")"
+    printf '"arch":"%s",' "$(installer_json_escape "$INSTALLER_PF_ARCH")"
+    printf '"memory_mb":%s,' "${INSTALLER_PF_MEMORY_MB:-0}"
+    printf '"disk_free_mb":%s,' "${INSTALLER_PF_DISK_MB:-0}"
+    printf '"inode_free_percent":%s,' "${INSTALLER_PF_INODE_FREE:-0}"
+    printf '"public_ip":"%s",' "$(installer_json_escape "$INSTALLER_PF_IP")"
+    printf '"port_80":"%s",' "$(installer_json_escape "$INSTALLER_PF_PORT80")"
+    printf '"port_443":"%s",' "$(installer_json_escape "$INSTALLER_PF_PORT443")"
+    printf '"recommended_proxy_port":"%s",' "$(installer_json_escape "$INSTALLER_PF_RECOMMENDED_PORT")"
+    printf '"admin_port":"%s",' "$(installer_json_escape "$INSTALLER_PF_ADMIN")"
+    printf '"metrics_port":"%s",' "$(installer_json_escape "$INSTALLER_PF_METRICS")"
+    printf '"api_port":"%s",' "$(installer_json_escape "$INSTALLER_PF_API")"
+    printf '"firewall":"%s",' "$(installer_json_escape "$INSTALLER_PF_FIREWALL")"
+    printf '"existing_install":"%s"' "$(installer_json_escape "$INSTALLER_PF_EXISTING")"
+    printf '}\n'
+    [ "$INSTALLER_PREFLIGHT_FATAL" -eq 0 ]
+}
+
 installer_choose_public_port() {
     local recommended choice custom owner
     recommended="${INSTALLER_SELECTED_PORT:-}"
@@ -371,14 +400,14 @@ installer_domain_preflight() {
 
 installer_choose_mode() {
     local choice
-    echo ""
-    echo -e "  ${BOLD:-}Что установить?${NC:-}"
-    echo -e "  ${CYAN:-}1)${NC:-} ${BOLD:-}Свой домен и сайт${NC:-}"
-    echo -e "     ${DIM:-}Прокси маскируется под ваш HTTPS-сайт. Нужны готовые DNS-записи.${NC:-}"
-    echo -e "  ${CYAN:-}2)${NC:-} ${BOLD:-}Только прокси${NC:-}"
-    echo -e "     ${DIM:-}Без сайта и сертификата. Лучше для серверов с уже занятым 443.${NC:-}"
-    echo -e "  ${DIM:-}0) Отмена${NC:-}"
-    echo -ne "  Выбор [2]: "
+    echo "" >&2
+    echo -e "  ${BOLD:-}Что установить?${NC:-}" >&2
+    echo -e "  ${CYAN:-}1)${NC:-} ${BOLD:-}Свой домен и сайт${NC:-}" >&2
+    echo -e "     ${DIM:-}Прокси маскируется под ваш HTTPS-сайт. Нужны готовые DNS-записи.${NC:-}" >&2
+    echo -e "  ${CYAN:-}2)${NC:-} ${BOLD:-}Только прокси${NC:-}" >&2
+    echo -e "     ${DIM:-}Без сайта и сертификата. Лучше для серверов с уже занятым 443.${NC:-}" >&2
+    echo -e "  ${DIM:-}0) Отмена${NC:-}" >&2
+    echo -ne "  Выбор [2]: " >&2
     read -r choice
     case "${choice:-2}" in
         1) printf 'pro\n' ;;
