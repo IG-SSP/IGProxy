@@ -91,14 +91,17 @@ download_telemt() {
         return 1
     fi
 
-    local tmp_file="/tmp/telemt_download_$$"
-    local checksum_file="${tmp_file}.sha256"
-    local extract_dir="/tmp/telemt_extract_$$"
+    local tmp_dir tmp_file checksum_file extract_dir staged_bin backup_tmp
+    tmp_dir=$(mktemp -d /tmp/telemt-download.XXXXXX) || return 1
+    chmod 700 "$tmp_dir"
+    tmp_file="$tmp_dir/asset"
+    checksum_file="$tmp_dir/asset.sha256"
+    extract_dir="$tmp_dir/extract"
     log_info "Скачивание telemt ${version}: $url"
 
     if ! curl -L -s --max-time 120 -o "$tmp_file" "$url"; then
         log_error "Ошибка скачивания telemt"
-        rm -f "$tmp_file"
+        rm -rf -- "$tmp_dir"
         return 1
     fi
 
@@ -106,7 +109,7 @@ download_telemt() {
     # Fail closed: silently installing an unverified proxy binary is not safe.
     if ! curl -L -fsS --max-time 30 -o "$checksum_file" "${url}.sha256"; then
         log_error "Не удалось скачать контрольную сумму telemt"
-        rm -f "$tmp_file" "$checksum_file"
+        rm -rf -- "$tmp_dir"
         return 1
     fi
     local expected_sha actual_sha
@@ -114,7 +117,7 @@ download_telemt() {
     actual_sha=$(sha256sum "$tmp_file" 2>/dev/null | awk '{print $1}')
     if [ -z "$expected_sha" ] || [ "$actual_sha" != "$expected_sha" ]; then
         log_error "Контрольная сумма telemt не совпала"
-        rm -f "$tmp_file" "$checksum_file"
+        rm -rf -- "$tmp_dir"
         return 1
     fi
     log_dim "SHA-256 telemt подтверждён"
@@ -124,14 +127,13 @@ download_telemt() {
     file_size=$(stat -c%s "$tmp_file" 2>/dev/null || echo 0)
     if [ "$file_size" -lt 1000 ]; then
         log_error "Скачанный файл слишком маленький ($file_size байт) — возможна ошибка сети"
-        rm -f "$tmp_file" "$checksum_file"
+        rm -rf -- "$tmp_dir"
         return 1
     fi
 
     # Определяем тип файла и распаковываем
     local mime extracted=""
     mime=$(file -b --mime-type "$tmp_file" 2>/dev/null)
-    rm -rf "$extract_dir"
     mkdir -p "$extract_dir"
 
     case "$mime" in
@@ -169,25 +171,59 @@ download_telemt() {
 
     if [ -z "$extracted" ] || [ ! -f "$extracted" ]; then
         log_error "Не удалось извлечь бинарник telemt (mime: $mime)"
-        rm -f "$tmp_file" "$checksum_file"
-        rm -rf "$extract_dir"
+        rm -rf -- "$tmp_dir"
         return 1
     fi
 
-    # Устанавливаем
-    cp "$extracted" "$TELEMT_BIN"
-    chmod 755 "$TELEMT_BIN"
-    rm -f "$tmp_file" "$checksum_file"
-    rm -rf "$extract_dir"
-
-    # Проверяем
-    if "$TELEMT_BIN" --version &>/dev/null; then
-        log_success "telemt $(get_installed_telemt_version) установлен в $TELEMT_BIN"
-        return 0
-    else
-        log_error "Бинарник telemt не запускается ($(file -b "$TELEMT_BIN" 2>/dev/null))"
+    # Validate in staging, then atomically rename on the same filesystem.
+    staged_bin=$(mktemp "${TELEMT_BIN}.new.XXXXXX") || {
+        rm -rf -- "$tmp_dir"
+        return 1
+    }
+    if ! install -m 755 "$extracted" "$staged_bin" || \
+       ! "$staged_bin" --version 2>/dev/null | grep -Fq "$version"; then
+        log_error "Скачанный бинарник telemt не прошёл проверку запуска/версии"
+        rm -f -- "$staged_bin"
+        rm -rf -- "$tmp_dir"
         return 1
     fi
+    if [ -x "$TELEMT_BIN" ]; then
+        backup_tmp=$(mktemp "${TELEMT_BIN}.rollback.XXXXXX") || {
+            rm -f -- "$staged_bin"
+            rm -rf -- "$tmp_dir"
+            return 1
+        }
+        cp -a "$TELEMT_BIN" "$backup_tmp"
+        chmod 755 "$backup_tmp"
+        mv -f -- "$backup_tmp" "${TELEMT_BIN}.rollback"
+    fi
+    mv -f -- "$staged_bin" "$TELEMT_BIN"
+    rm -rf -- "$tmp_dir"
+    log_success "telemt $(get_installed_telemt_version) установлен в $TELEMT_BIN"
+    return 0
+}
+
+rollback_telemt_binary() {
+    [ -x "${TELEMT_BIN}.rollback" ] || return 1
+    install -m 755 "${TELEMT_BIN}.rollback" "$TELEMT_BIN"
+}
+
+commit_telemt_binary() {
+    rm -f -- "${TELEMT_BIN}.rollback"
+}
+
+wait_telemt_ready() {
+    local timeout="${1:-90}" port elapsed=0
+    port=$(get_config_value port "$TELEMT_CONFIG" 2>/dev/null || echo 443)
+    while [ "$elapsed" -lt "$timeout" ]; do
+        systemctl is-active --quiet "$TELEMT_SERVICE" || return 1
+        if ss -H -ltn "sport = :${port}" 2>/dev/null | grep -q .; then
+            return 0
+        fi
+        sleep 2
+        elapsed=$((elapsed + 2))
+    done
+    return 1
 }
 
 # ── Системный пользователь ───────────────────────────────────────────────────
@@ -376,10 +412,18 @@ update_telemt() {
 
     stop_telemt
     if download_telemt; then
-        start_telemt
-        log_success "telemt обновлён до $latest"
+        if start_telemt && wait_telemt_ready 90; then
+            commit_telemt_binary
+            log_success "telemt обновлён до $latest"
+        else
+            rollback_telemt_binary || true
+            start_telemt || true
+            log_error "Новое ядро не запустилось; восстановлена предыдущая версия"
+            return 1
+        fi
     else
-        start_telemt  # запускаем старую версию обратно
+        rollback_telemt_binary >/dev/null 2>&1 || true
+        start_telemt
         log_error "Обновление не удалось"
         return 1
     fi

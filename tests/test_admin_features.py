@@ -114,6 +114,29 @@ class AdminFeatureTests(unittest.TestCase):
         self.assertEqual(metrics["telemt_connections_total"], 12)
         self.assertNotIn("unrelated_metric", metrics)
 
+    def test_health_dc_parser_rejects_internal_ports_and_is_bounded(self):
+        with tempfile.TemporaryDirectory() as raw:
+            server = load_server(Path(raw))
+            rows = [
+                "proxy_for 1 127.0.0.1:443;",
+                "proxy_for 1 10.0.0.1:8888;",
+                "proxy_for 1 149.154.175.50:22;",
+            ]
+            rows.extend(
+                f"proxy_for 4 91.108.4.{index}:8888;"
+                for index in range(1, 100)
+            )
+            endpoints = server.parse_telemt_dc_endpoints("\n".join(rows))
+
+        self.assertLessEqual(len(endpoints), server.TELEMT_DC_MAX_ENDPOINTS)
+        self.assertTrue(all(item["port"] in {443, 8888} for item in endpoints))
+        self.assertFalse(any(item["host"].startswith(("127.", "10.")) for item in endpoints))
+
+    def test_health_get_does_not_expose_cache_bypass(self):
+        source = SERVER_PATH.read_text(encoding="utf-8")
+        route = source[source.index('elif path == "/api/health":'):source.index('elif path == "/api/users":')]
+        self.assertNotIn("force", route)
+
     def test_health_payload_reports_split_mss_without_user_data(self):
         with tempfile.TemporaryDirectory() as raw:
             server = load_server(Path(raw))

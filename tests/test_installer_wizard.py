@@ -249,6 +249,10 @@ installer_preflight_json
         self.assertIn('${TELEMT_PINNED_VERSION:-3.4.25}', telemt)
         self.assertIn('"${url}.sha256"', telemt)
         self.assertIn('sha256sum "$tmp_file"', telemt)
+        self.assertIn("mktemp -d /tmp/telemt-download.XXXXXX", telemt)
+        self.assertIn('mv -f -- "$staged_bin" "$TELEMT_BIN"', telemt)
+        self.assertIn("rollback_telemt_binary()", telemt)
+        self.assertIn("wait_telemt_ready()", telemt)
         self.assertIn('local client_mss_bulk="1400"', config)
         self.assertIn('client_mss_bulk = \\"${client_mss_bulk}\\"', config)
 

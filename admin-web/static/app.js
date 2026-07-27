@@ -1925,11 +1925,11 @@ async function refreshAll(options = {}) {
   }
 }
 
-async function refreshHealth(options = {}) {
+async function refreshHealth() {
   if (state.healthLoading) return state.health;
   state.healthLoading = true;
   try {
-    state.health = await api(`/api/health${options.force ? "?force=1" : ""}`);
+    state.health = await api("/api/health");
     renderHealth();
     return state.health;
   } finally {

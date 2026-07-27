@@ -77,6 +77,9 @@ _HEALTH_CACHE: dict[str, Any] | None = None
 _HEALTH_CACHE_AT = 0.0
 _HEALTH_CACHE_SECONDS = float(os.getenv("GOTELEGRAM_HEALTH_CACHE_SECONDS", "15"))
 _HEALTH_LOCK = threading.Lock()
+TELEMT_DC_MAX_CONFIG_BYTES = 1024 * 1024
+TELEMT_DC_MAX_ENDPOINTS = 64
+TELEMT_DC_ALLOWED_PORTS = {443, 8888}
 TRAFFIC_WINDOWS = {
     "15m": 15 * 60,
     "1h": 60 * 60,
@@ -1094,13 +1097,15 @@ def parse_telemt_dc_endpoints(text: str) -> list[dict[str, Any]]:
             parsed = ipaddress.ip_address(host)
         except ValueError:
             continue
-        if parsed.version != 4 or not 1 <= port <= 65535:
+        if parsed.version != 4 or not parsed.is_global or port not in TELEMT_DC_ALLOWED_PORTS:
             continue
         key = (dc, host, port)
         if key in seen:
             continue
         seen.add(key)
         endpoints.append({"dc": dc, "host": host, "port": port})
+        if len(endpoints) >= TELEMT_DC_MAX_ENDPOINTS:
+            break
     return endpoints
 
 
@@ -1117,9 +1122,13 @@ def _probe_dc_endpoint(host: str, port: int, timeout: float = 0.9) -> dict[str, 
 
 def telemt_dc_health() -> dict[str, Any]:
     try:
-        source = TELEMT_PROXY_CONFIG_V4.read_text(encoding="utf-8", errors="ignore")
+        with TELEMT_PROXY_CONFIG_V4.open("rb") as stream:
+            payload = stream.read(TELEMT_DC_MAX_CONFIG_BYTES + 1)
     except OSError:
         return {"available": False, "groups": [], "reachable": 0, "total": 0}
+    if len(payload) > TELEMT_DC_MAX_CONFIG_BYTES:
+        return {"available": False, "groups": [], "reachable": 0, "total": 0, "error": "config_too_large"}
+    source = payload.decode("utf-8", errors="ignore")
     endpoints = parse_telemt_dc_endpoints(source)
     unique = sorted({(item["host"], item["port"]) for item in endpoints})
     results: dict[tuple[str, int], dict[str, Any]] = {}
@@ -1957,9 +1966,7 @@ class AdminHandler(BaseHTTPRequestHandler):
         if path == "/api/overview":
             self.send_json({"ok": True, "data": overview_payload()})
         elif path == "/api/health":
-            qs = urllib.parse.parse_qs(parsed.query)
-            force = qs.get("force", ["0"])[0] == "1"
-            self.send_json({"ok": True, "data": health_payload(force=force)})
+            self.send_json({"ok": True, "data": health_payload()})
         elif path == "/api/users":
             users = read_user_records()
             latest = latest_user_stats()

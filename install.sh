@@ -1349,12 +1349,20 @@ auto_update_telemt_if_possible() {
     if systemctl is-active --quiet "$TELEMT_SERVICE" 2>/dev/null; then
         systemctl stop "$TELEMT_SERVICE" 2>/dev/null || true
     fi
-    if download_telemt "$target" >/dev/null 2>&1; then
+    if ! download_telemt "$target" >/dev/null 2>&1; then
+        rollback_telemt_binary >/dev/null 2>&1 || true
+        log_warning "Автоматическое обновление telemt не удалось; запустите menu 13 → Update telemt вручную"
+        systemctl start "$TELEMT_SERVICE" 2>/dev/null || true
+        return 0
+    fi
+    if systemctl start "$TELEMT_SERVICE" 2>/dev/null && wait_telemt_ready 90; then
+        commit_telemt_binary
         log_success "telemt: $(get_installed_telemt_version 2>/dev/null || echo unknown)"
     else
-        log_warning "Автоматическое обновление telemt не удалось; запустите menu 13 → Update telemt вручную"
+        rollback_telemt_binary >/dev/null 2>&1 || true
+        systemctl start "$TELEMT_SERVICE" 2>/dev/null || true
+        log_warning "Новое ядро не запустилось; восстановлена предыдущая версия"
     fi
-    systemctl start "$TELEMT_SERVICE" 2>/dev/null || true
 }
 
 auto_update_bot_if_possible() {
