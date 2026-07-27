@@ -1,5 +1,7 @@
 import hashlib
+import importlib.util
 import io
+import re
 import shutil
 import subprocess
 import tarfile
@@ -14,6 +16,33 @@ BUILDER = ROOT / "tools" / "build_release.py"
 
 
 class ReleaseSecurityTests(unittest.TestCase):
+    def test_portable_installer_is_deterministic_and_embeds_verified_release(self):
+        module_path = ROOT / "tools" / "build_portable_installer.py"
+        spec = importlib.util.spec_from_file_location("portable_builder", module_path)
+        module = importlib.util.module_from_spec(spec)
+        assert spec.loader is not None
+        spec.loader.exec_module(module)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            first = Path(tmp) / "first.run"
+            second = Path(tmp) / "second.run"
+            first_sha = module.build(first)
+            second_sha = module.build(second)
+            self.assertEqual(first.read_bytes(), second.read_bytes())
+            self.assertEqual(first_sha, second_sha)
+
+            payload = first.read_bytes()
+            marker = b"__GOTELEGRAM_ARCHIVE_BELOW__\n"
+            header, archive = payload.split(marker, 1)
+            match = re.search(rb'EXPECTED_RELEASE_SHA256="([0-9a-f]{64})"', header)
+            self.assertIsNotNone(match)
+            self.assertEqual(hashlib.sha256(archive).hexdigest().encode(), match.group(1))
+            self.assertNotIn(b"GOTELEGRAM_PAT", header)
+            self.assertNotIn(b"raw.githubusercontent.com", header)
+            self.assertNotIn(b"exec bash \"$WORK_DIR/bootstrap.sh\"", header)
+            self.assertIn(b"trap cleanup EXIT INT TERM HUP", header)
+            self.assertIn(b'bash "$WORK_DIR/bootstrap.sh" "$@"\nexit 0\n', header)
+
     def test_release_builder_is_deterministic_and_manifest_is_complete(self):
         with tempfile.TemporaryDirectory() as temp:
             first = Path(temp) / "first.tar.gz"
