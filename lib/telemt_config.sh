@@ -216,7 +216,7 @@ EOTOML
 
     chmod 600 "$output"
     log_success "Конфиг telemt записан: $output"
-    log_dim "Режим: $mask_mode, домен: $mask_domain, порт mask: $mask_port"
+    log_dim "Сценарий: $(human_mode_name "$mask_mode"), домен: $mask_domain, внутренний порт: $mask_port"
     log_dim "Masking params: bucket=${bucket_floor}..${bucket_cap}, timing=${timing_floor}..${timing_ceiling}ms"
 }
 
@@ -582,7 +582,7 @@ show_proxy_info() {
         echo -e "  ${WHITE}IP:${NC}         ${CYAN}${ip}${NC}"
     fi
     echo -e "  ${WHITE}Порт:${NC}       ${CYAN}${port}${NC}"
-    echo -e "  ${WHITE}Режим:${NC}      ${CYAN}${mode}${NC}"
+    echo -e "  ${WHITE}Сценарий:${NC}   ${CYAN}$(human_mode_name "$mode")${NC}"
     echo -e "  ${WHITE}Маскировка:${NC} ${CYAN}${mask_host}${NC}"
     echo -e "  ${WHITE}Secret:${NC}     ${CYAN}${secret:0:16}...${NC}"
     echo -e "  ${DIM}$(printf '─%.0s' {1..50})${NC}"
@@ -596,8 +596,8 @@ show_proxy_info() {
     fi
 }
 
-# ── Вывод информации о прокси (Pro-режим) ──────────────────────────────────
-# В pro-режиме ссылка содержит домен (не IP) и fake-TLS секрет (ee...)
+# ── Вывод информации о прокси со своим доменом ───────────────────────────────
+# В этом сценарии ссылка содержит домен (не IP) и fake-TLS секрет (ee...)
 show_proxy_info_pro() {
     local domain="$1"
     local faketls_secret="$2"
@@ -607,7 +607,7 @@ show_proxy_info_pro() {
     local link="tg://proxy?server=${domain}&port=${public_port}&secret=${faketls_secret}"
 
     echo ""
-    echo -e "  ${BOLD}${WHITE}✅ Pro-прокси настроен${NC}"
+    echo -e "  ${BOLD}${WHITE}✅ Прокси со своим доменом и сайтом настроен${NC}"
     echo -e "  ${DIM}$(printf '─%.0s' {1..55})${NC}"
     echo -e "  ${WHITE}Ядро:${NC}       telemt (Rust)"
     echo -e "  ${WHITE}Домен:${NC}      ${CYAN}${domain}${NC}"

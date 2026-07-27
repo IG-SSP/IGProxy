@@ -160,11 +160,18 @@ EONGINX_TEMP
 }
 
 # ── Получение SSL сертификата ────────────────────────────────────────────────
+ssl_certificate_is_usable() {
+    local domain="$1" cert="/etc/letsencrypt/live/$1/fullchain.pem"
+    [ -s "$cert" ] || return 1
+    openssl x509 -in "$cert" -noout -checkend 86400 >/dev/null 2>&1 || return 1
+    openssl x509 -in "$cert" -noout -checkhost "$domain" >/dev/null 2>&1
+}
+
 obtain_ssl_certificate() {
     local domain="$1"
     local email="${2:-}"
 
-    if [ ! -d "/etc/letsencrypt/live/$domain" ]; then
+    if ! ssl_certificate_is_usable "$domain"; then
         log_info "Получение SSL сертификата для $domain..."
 
         # Временный конфиг для ACME challenge
@@ -192,12 +199,19 @@ obtain_ssl_certificate() {
         else
             certbot_args+=(--register-unsafely-without-email)
         fi
+        [ -d "/etc/letsencrypt/live/$domain" ] && certbot_args+=(--force-renewal)
 
-        if certbot "${certbot_args[@]}" 2>/dev/null; then
+        local certbot_log
+        certbot_log=$(mktemp /tmp/gotelegram-certbot.XXXXXX) || return 1
+        chmod 600 "$certbot_log"
+        if certbot "${certbot_args[@]}" >"$certbot_log" 2>&1; then
+            rm -f -- "$certbot_log"
             log_success "SSL сертификат получен для $domain"
             return 0
         else
             log_error "Не удалось получить SSL сертификат"
+            tail -n 8 "$certbot_log" | sed 's/^/    /' >&2
+            rm -f -- "$certbot_log"
             log_dim "Убедитесь что домен $domain направлен на IP этого сервера"
             log_dim "и порт 80 открыт в файрволе."
             return 1
@@ -336,7 +350,7 @@ deploy_template_to_nginx() {
     log_success "Шаблон развёрнут в $WEBSITE_ROOT"
 }
 
-# ── Полная установка pro-режима ──────────────────────────────────────────────
+# ── Полная установка сценария со своим доменом и сайтом ─────────────────────
 setup_pro_mode() {
     local domain="$1"
     local template_dir="$2"
@@ -344,7 +358,7 @@ setup_pro_mode() {
     local email="${4:-}"
     local public_port="${5:-443}"
 
-    log_step "Настройка pro-режима"
+    log_step "Настройка своего домена и сайта"
 
     # 1. Устанавливаем nginx
     run_with_spinner "Установка nginx" install_nginx || return 1
@@ -401,13 +415,13 @@ restart_nginx() {
     fi
 }
 
-# ── Удаление pro-режима ──────────────────────────────────────────────────────
+# ── Удаление собственного сайта ──────────────────────────────────────────────
 remove_pro_mode() {
-    log_info "Удаление pro-режима..."
+    log_info "Удаление сайта и его конфигурации..."
     rm -f "$NGINX_SITE_CONF" "$NGINX_SITE_LINK"
     rm -rf "$WEBSITE_ROOT"
     systemctl restart nginx 2>/dev/null
-    log_success "Pro-режим удалён (nginx оставлен)"
+    log_success "Сайт и его конфигурация удалены (nginx оставлен)"
 }
 
 # ── Смена шаблона ────────────────────────────────────────────────────────────

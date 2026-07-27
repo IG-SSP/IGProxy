@@ -88,6 +88,27 @@ installer_selinux_type_allows_port http_port_t 8443
             text=True,
         )
 
+    def test_ufw_parser_accepts_numbered_rules_and_nginx_profiles(self):
+        script = r'''
+source "$1"
+ufw() {
+    printf '%s\n' \
+      "Status: active" \
+      "[ 1] 9443/tcp ALLOW IN Anywhere" \
+      "[ 2] Nginx Full ALLOW IN Anywhere"
+}
+installer_ufw_allows_port 9443
+installer_ufw_allows_port 80
+installer_ufw_allows_port 443
+! installer_ufw_allows_port 2053
+'''
+        subprocess.run(
+            ["bash", "-c", script, "bash", str(WIZARD)],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

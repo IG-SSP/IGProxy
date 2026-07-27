@@ -85,6 +85,18 @@ installer_pick_internal_port 8443
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(result.stdout.strip(), "9443")
 
+    def test_reserved_local_service_ports_are_not_public_candidates(self):
+        result = run_bash(
+            """
+installer_port_listener() { return 0; }
+for port in 1984 9090 9091; do
+  installer_port_is_usable "$port" && exit 1
+done
+true
+"""
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+
     def test_reserved_service_port_must_be_bound_to_loopback(self):
         result = run_bash(
             """
@@ -151,6 +163,8 @@ installer_preflight_json
         self.assertIn('save_gotelegram_config "telemt" "pro" "$public_port"', install)
         self.assertIn('show_proxy_info_pro "$user_domain" "$faketls_secret" "$public_port" "$nginx_internal_port"', install)
         self.assertIn('format_https_url "$user_domain" "$public_port"', install)
+        self.assertIn('tf install_arch_desc1 "$public_port"', install)
+        self.assertIn('tf install_arch_desc3 "$user_domain" "$public_port"', install)
         self.assertIn('port=${public_port}', telemt)
 
     def test_bootstrap_contains_required_wizard_module(self):
@@ -182,6 +196,19 @@ installer_preflight_json
         self.assertIn("gotelegram-certbot-renew.timer", website)
         self.assertIn("Шаблон содержит ссылки или специальные файлы", website)
         self.assertIn(".gotelegram-site.XXXXXX", website)
+        self.assertIn("ssl_certificate_is_usable", website)
+        self.assertIn("-checkend 86400", website)
+        self.assertIn('-checkhost "$domain"', website)
+        self.assertIn("gotelegram-certbot.XXXXXX", website)
+
+    def test_russian_operator_text_does_not_expose_internal_mode_names(self):
+        russian = (ROOT / "lib" / "lang" / "ru.sh").read_text(encoding="utf-8")
+        website = (ROOT / "lib" / "website.sh").read_text(encoding="utf-8")
+        telemt = (ROOT / "lib" / "telemt_config.sh").read_text(encoding="utf-8")
+        visible = "\n".join((russian, website, telemt))
+        self.assertNotIn("Pro-режим", visible)
+        self.assertNotIn("pro-режим", visible)
+        self.assertNotIn("Lite-режим", visible)
 
     def test_stats_follow_configured_ports_instead_of_hardcoded_443(self):
         stats = (ROOT / "lib" / "stats.sh").read_text(encoding="utf-8")
@@ -203,6 +230,15 @@ installer_preflight_json
             'installer_prepare_selinux_http_port "$nginx_internal_port"',
             install,
         )
+
+    def test_selected_ports_are_checked_against_firewall(self):
+        wizard = WIZARD.read_text(encoding="utf-8")
+        install = INSTALL.read_text(encoding="utf-8")
+        self.assertIn("installer_firewall_check_ports", wizard)
+        self.assertIn('installer_firewall_check_ports "$port"', install)
+        self.assertIn('installer_firewall_check_ports "$public_port" 80', install)
+        self.assertNotIn("ufw allow ${port}/tcp >/dev/null", wizard)
+        self.assertNotIn("firewall-cmd --permanent --add-port=${port}/tcp >/dev/null", wizard)
 
 
 if __name__ == "__main__":

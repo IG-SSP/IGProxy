@@ -45,11 +45,12 @@ load_language "ru"
 
 # ── Главное меню (Compact Dashboard + 5 Top-Level Items) ──────────────────────
 show_main_menu() {
-    local proxy_status bot_status nginx_st mode domain secret port ip link ssl_expiry mask_port site_url
+    local proxy_status bot_status nginx_st mode mode_label domain secret port ip link ssl_expiry mask_port site_url
     proxy_status=$(telemt_status)
     bot_status=$(bot_service_status)
     nginx_st=$(nginx_status 2>/dev/null || echo "stopped")
     mode=$(config_get mode 2>/dev/null || echo "—")
+    mode_label=$(human_mode_name "$mode")
     domain=$(config_get domain 2>/dev/null || echo "")
     secret=$(get_config_value secret 2>/dev/null || echo "")
     port=$(get_config_value port 2>/dev/null || echo "443")
@@ -77,7 +78,7 @@ show_main_menu() {
         stopped) proxy_icon="○"; proxy_color="${YELLOW}" ;;
         *)       proxy_icon="✗"; proxy_color="${RED}" ;;
     esac
-    echo -e "  ${proxy_color}${proxy_icon}${NC} $(t svc_proxy)    ${proxy_color}${proxy_status}${NC}    ${DIM}(telemt ${mode})${NC}"
+    echo -e "  ${proxy_color}${proxy_icon}${NC} $(t svc_proxy)    ${proxy_color}${proxy_status}${NC}    ${DIM}(telemt · ${mode_label})${NC}"
 
     # nginx
     local nginx_icon nginx_color
@@ -111,7 +112,7 @@ show_main_menu() {
     echo -e "  ${DIM}${line2}${NC}"
 
     # ── Network parameters ──
-    echo -e "  ${WHITE}$(t net_ip)${NC}    ${CYAN}${ip}${NC}    ${WHITE}$(t net_port)${NC} ${CYAN}${port}${NC}    ${WHITE}$(t net_mode)${NC} ${CYAN}${mode}${NC}"
+    echo -e "  ${WHITE}$(t net_ip)${NC}    ${CYAN}${ip}${NC}    ${WHITE}$(t net_port)${NC} ${CYAN}${port}${NC}    ${WHITE}$(t net_mode)${NC} ${CYAN}${mode_label}${NC}"
     if [ -n "$domain" ]; then
         echo -e "  ${WHITE}$(t net_domain)${NC} ${CYAN}${domain}${NC}"
     fi
@@ -204,7 +205,6 @@ submenu_manage() {
         echo -e "  ${CYAN}3${NC}) $(t manage_update_telemt)"
         echo -e "  ${CYAN}4${NC}) $(t manage_site_ssl)"
         echo -e "  ${CYAN}5${NC}) $(t manage_remove)"
-        echo -e "  ${CYAN}6${NC}) $(t manage_language)"
         echo -e "  ${CYAN}0${NC}) $(t back)"
         echo -e "  ${DIM}$(printf '─%.0s' {1..54})${NC}"
         echo -ne "  ${WHITE}$(t choose):${NC} "
@@ -216,7 +216,6 @@ submenu_manage() {
             3) telemt_version_change ;;
             4) menu_website ;;
             5) menu_remove ;;
-            6) menu_language ;;
             0) break ;;
             *) log_error "$(t invalid_choice)" ;;
         esac
@@ -765,6 +764,7 @@ install_lite_mode() {
         port=$(select_port)
     fi
     [ $? -ne 0 ] && return
+    installer_firewall_check_ports "$port" || return
     if [ "$port" = "443" ]; then
         warn_3xui_443_conflict || true
     fi
@@ -853,6 +853,10 @@ install_pro_mode() {
     else
         public_port="443"
     fi
+    if [ "$public_port" = "80" ]; then
+        log_error "В сценарии со своим сайтом TCP/80 нужен nginx для выпуска сертификата. Выберите другой порт прокси."
+        return
+    fi
     [ "$public_port" = "443" ] && warn_3xui_443_conflict || true
 
     # Домен
@@ -869,6 +873,7 @@ install_pro_mode() {
     if type installer_domain_preflight >/dev/null 2>&1; then
         installer_domain_preflight "$user_domain" || return
     fi
+    installer_firewall_check_ports "$public_port" 80 || return
 
     # Email для Let's Encrypt (ленивый: пропускаем — LE без почты)
     local ssl_email=""
@@ -904,9 +909,9 @@ install_pro_mode() {
         nginx_internal_port=8443
     fi
     echo ""
-    echo -e "  ${DIM}$(t install_arch_desc1)${NC}"
+    echo -e "  ${DIM}$(tf install_arch_desc1 "$public_port")${NC}"
     echo -e "  ${DIM}$(tf install_arch_desc2 "$nginx_internal_port")${NC}"
-    echo -e "  ${DIM}$(tf install_arch_desc3 "$user_domain")${NC}"
+    echo -e "  ${DIM}$(tf install_arch_desc3 "$user_domain" "$public_port")${NC}"
 
     # Fake-TLS секрет (ee + secret + hex домена)
     local raw_secret; raw_secret=$(generate_hex 32)
@@ -1113,7 +1118,7 @@ menu_change_mode() {
     local current_mode
     current_mode=$(config_get mode 2>/dev/null)
     echo ""
-    echo -e "  ${WHITE}$(t change_current_mode)${NC} ${CYAN}${current_mode}${NC}"
+    echo -e "  ${WHITE}$(t change_current_mode)${NC} ${CYAN}$(human_mode_name "$current_mode")${NC}"
     echo ""
     echo -e "  ${CYAN}1${NC}) $(t change_template)"
     echo -e "  ${CYAN}2${NC}) $(t change_mode_switch)"
@@ -1792,40 +1797,6 @@ bot_remove() {
     log_success "$(t bot_removed)"
 }
 
-# ── First-run: pick language ─────────────────────────────────────────────────
-first_run_language_picker() {
-    # Show picker only if language not yet saved
-    local marker="${GOTELEGRAM_DIR:-/opt/gotelegram}/.language"
-    local cfg_lang=""
-    if [ -f "$GOTELEGRAM_CONFIG" ] && command -v jq >/dev/null 2>&1; then
-        cfg_lang=$(jq -r '.language // empty' "$GOTELEGRAM_CONFIG" 2>/dev/null)
-    fi
-    if [ -f "$marker" ] || [ -n "$cfg_lang" ]; then
-        return 0
-    fi
-
-    local chosen
-    chosen=$(pick_language_interactive)
-    save_language "$chosen"
-    load_language "$chosen"
-}
-
-# ── Change language on demand ────────────────────────────────────────────────
-menu_language() {
-    echo ""
-    echo -e "  ${BOLD}${WHITE}$(t lang_change_prompt)${NC}"
-    echo -e "  ${DIM}$(printf '─%.0s' {1..55})${NC}"
-    echo -e "  ${CYAN}1${NC}) English"
-    echo -e "  ${CYAN}2${NC}) Русский"
-    echo -e "  ${CYAN}0${NC}) $(t back)"
-    echo -ne "  ${WHITE}$(t choose):${NC} "
-    read -r ch
-    case "$ch" in
-        1) save_language "en"; load_language "en"; log_success "$(tf lang_saved English)" ;;
-        2) save_language "ru"; load_language "ru"; log_success "$(tf lang_saved Русский)" ;;
-    esac
-}
-
 # ══════════════════════════════════════════════════════════════════════════════
 # Non-interactive action dispatcher (bot / CI / scripting interface)
 # ══════════════════════════════════════════════════════════════════════════════
@@ -2090,6 +2061,15 @@ installer_dry_run() {
     local selected_mode public_port domain="" internal_port=""
     selected_mode=$(installer_choose_mode) || return 1
     public_port=$(installer_choose_public_port) || return 1
+    if [ "$selected_mode" = "pro" ] && [ "$public_port" = "80" ]; then
+        log_error "TCP/80 зарезервирован для сайта и проверки Let's Encrypt."
+        return 1
+    fi
+    if [ "$selected_mode" = "pro" ]; then
+        installer_firewall_check_ports "$public_port" 80 || return 1
+    else
+        installer_firewall_check_ports "$public_port" || return 1
+    fi
 
     if [ "$selected_mode" = "pro" ]; then
         echo ""

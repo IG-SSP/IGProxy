@@ -3,7 +3,7 @@
 goTelegram Pro Bot - MTProxy Management for Linux
 Manages telemt engine via Telegram interface with full CLI feature parity
 Uses python-telegram-bot v21+
-Supports EN/RU UI with per-user language preferences.
+Russian-only operator interface.
 """
 
 import asyncio
@@ -53,9 +53,6 @@ try:
         t as _t,
         tf as _tf,
         get_user_lang,
-        set_user_lang,
-        get_language_name,
-        SUPPORTED_LANGS,
     )
 except Exception as _i18n_err:  # pragma: no cover — defensive fallback
     logging.warning("i18n module not available: %s", _i18n_err)
@@ -71,15 +68,7 @@ except Exception as _i18n_err:  # pragma: no cover — defensive fallback
             return template
 
     def get_user_lang(user_id):
-        return "en"
-
-    def set_user_lang(user_id, code):
-        return False
-
-    def get_language_name(code):
-        return code
-
-    SUPPORTED_LANGS = ("en",)
+        return "ru"
 
 
 def _uid(update: Optional[Update]) -> Optional[int]:
@@ -599,10 +588,7 @@ def get_main_menu(user_id: Optional[int] = None) -> InlineKeyboardMarkup:
             InlineKeyboardButton(_t(user_id, "menu_stats"), callback_data="menu_stats"),
             InlineKeyboardButton(_t(user_id, "menu_users"), callback_data="menu_users"),
         ],
-        [
-            InlineKeyboardButton(_t(user_id, "menu_admins"), callback_data="menu_admins"),
-            InlineKeyboardButton(_t(user_id, "menu_language"), callback_data="menu_lang"),
-        ],
+        [InlineKeyboardButton(_t(user_id, "menu_admins"), callback_data="menu_admins")],
         [InlineKeyboardButton(_t(user_id, "menu_close"), callback_data="close_menu")],
     ]
     return InlineKeyboardMarkup(buttons)
@@ -665,26 +651,6 @@ async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         f"{_t(user_id, 'help_lines')}"
     )
     await update.message.reply_text(help_text, parse_mode="HTML")
-
-
-async def cmd_lang(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Show language picker."""
-    if not await require_auth(update, context):
-        return
-    user_id = _uid(update)
-    current = get_user_lang(user_id)
-    title = _t(user_id, "lang_title")
-    curr_line = _tf(user_id, "lang_current", get_language_name(current))
-    prompt = _t(user_id, "lang_choose")
-    text = f"<b>{title}</b>\n\n{curr_line}\n\n{prompt}"
-    keyboard = InlineKeyboardMarkup([
-        [
-            InlineKeyboardButton("🇬🇧 English", callback_data="lang_set_en"),
-            InlineKeyboardButton("🇷🇺 Русский", callback_data="lang_set_ru"),
-        ],
-        [InlineKeyboardButton(_t(user_id, "btn_back"), callback_data="menu_main")],
-    ])
-    await update.message.reply_text(text, reply_markup=keyboard, parse_mode="HTML")
 
 
 async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -1396,7 +1362,7 @@ async def cb_pro_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         text = (
             "<b>⚠️ Установка Pro из бота пока не поддерживается</b>\n\n"
             f"Выбранный шаблон: <code>{html.escape(tpl_id)}</code>\n\n"
-            "Pro-режим требует ввода домена, email и проверки DNS. "
+            "Сценарий со своим доменом и сайтом требует ввода домена, email и проверки DNS. "
             "Чтобы установить Pro, запустите на сервере:\n"
             "<code>gotelegram</code> → <b>1) Прокси → 1) Установить/Обновить → Pro</b>\n\n"
             "Существующая конфигурация <b>не была изменена</b>."
@@ -2243,14 +2209,14 @@ async def cb_menu_restart(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     query = update.callback_query
     await query.answer()
 
-    text = "⏳ Restarting telemt service..."
+    text = "⏳ Перезапускаю службу telemt..."
     await safe_edit_message(query,text)
 
     code, _, stderr = await sh("systemctl", "restart", TELEMT_SERVICE)
     if code == 0:
-        text = "✅ Service restarted successfully"
+        text = "✅ Служба telemt успешно перезапущена"
     else:
-        text = f"❌ Failed to restart:\n<code>{html.escape(stderr[:500])}</code>"
+        text = f"❌ Не удалось перезапустить telemt:\n<code>{html.escape(stderr[:500])}</code>"
 
     keyboard = InlineKeyboardMarkup(
         [[InlineKeyboardButton(_t(_uid(update), "btn_back"), callback_data="menu_main")]]
@@ -2271,9 +2237,9 @@ async def cb_menu_logs(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 
     if code == 0:
         log_text = stdout[-1000:] if len(stdout) > 1000 else stdout
-        text = f"<b>📋 Recent Logs</b>\n\n<pre>{html.escape(log_text)}</pre>"
+        text = f"<b>📋 Последние записи журнала</b>\n\n<pre>{html.escape(log_text)}</pre>"
     else:
-        text = "❌ Failed to retrieve logs"
+        text = "❌ Не удалось получить журнал telemt"
 
     keyboard = InlineKeyboardMarkup(
         [[InlineKeyboardButton(_t(_uid(update), "btn_back"), callback_data="menu_main")]]
@@ -2733,9 +2699,9 @@ async def cb_ssl_status(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     code, stdout, _ = await sh("certbot", "certificates")
 
     if code == 0:
-        text = f"<b>📊 SSL Certificates</b>\n\n<pre>{html.escape(stdout[:1000])}</pre>"
+        text = f"<b>📊 SSL-сертификаты</b>\n\n<pre>{html.escape(stdout[:1000])}</pre>"
     else:
-        text = "❌ Failed to get SSL status"
+        text = "❌ Не удалось получить состояние SSL-сертификатов"
 
     keyboard = InlineKeyboardMarkup(
         [[InlineKeyboardButton("« Back", callback_data="menu_website")]]
@@ -3023,40 +2989,6 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         return
 
     # Language picker
-    if data == "menu_lang":
-        await query.answer()
-        current = get_user_lang(user_id)
-        title = _t(user_id, "lang_title")
-        curr_line = _tf(user_id, "lang_current", get_language_name(current))
-        prompt = _t(user_id, "lang_choose")
-        text = f"<b>{title}</b>\n\n{curr_line}\n\n{prompt}"
-        keyboard = InlineKeyboardMarkup([
-            [
-                InlineKeyboardButton("🇬🇧 English", callback_data="lang_set_en"),
-                InlineKeyboardButton("🇷🇺 Русский", callback_data="lang_set_ru"),
-            ],
-            [InlineKeyboardButton(_t(user_id, "btn_back"), callback_data="menu_main")],
-        ])
-        await safe_edit_message(query, text, reply_markup=keyboard, parse_mode="HTML")
-        return
-
-    if data.startswith("lang_set_"):
-        code = data.replace("lang_set_", "", 1)
-        if code in SUPPORTED_LANGS:
-            set_user_lang(user_id, code)
-            await query.answer(_tf(user_id, "lang_saved", get_language_name(code)))
-            # Re-render main menu in the new language
-            buttons = get_main_menu(user_id)
-            text = (
-                f"<b>{_tf(user_id, 'welcome_title', GOTELEGRAM_VERSION)}</b>\n\n"
-                f"{_t(user_id, 'welcome_subtitle')}\n"
-                f"{_t(user_id, 'welcome_prompt')}"
-            )
-            await safe_edit_message(query, text, reply_markup=buttons, parse_mode="HTML")
-        else:
-            await query.answer("Unsupported language")
-        return
-
     # Dispatch to handlers
     handlers = {
         "menu_status": cb_menu_status,
@@ -3096,7 +3028,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     elif data in handlers:
         await handlers[data](update, context)
     else:
-        await query.answer("Unknown action")
+        await query.answer("Неизвестное действие")
 
 
 # ============================================================================
@@ -3186,7 +3118,6 @@ def main() -> None:
     application.add_handler(CommandHandler("help", cmd_help))
     application.add_handler(CommandHandler("status", cmd_status))
     application.add_handler(CommandHandler("logs", cmd_logs))
-    application.add_handler(CommandHandler("lang", cmd_lang))
     application.add_handler(CommandHandler("addadmin", cmd_addadmin))
     application.add_handler(CommandHandler("deladmin", cmd_deladmin))
 

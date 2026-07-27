@@ -47,6 +47,9 @@ installer_port_is_usable() {
     local port="$1" listener
     [[ "$port" =~ ^[0-9]+$ ]] || return 1
     [ "$port" -ge 1 ] && [ "$port" -le 65535 ] || return 1
+    case "$port" in
+        1984|9090|9091) return 1 ;;
+    esac
     listener=$(installer_port_listener "$port")
     [ -z "$listener" ] && return 0
     installer_listener_is_ours "$port" "$listener"
@@ -149,6 +152,71 @@ installer_firewall_label() {
     fi
 }
 
+installer_ufw_allows_port() {
+    local port="$1" status
+    status=$(ufw status 2>/dev/null || true)
+    printf '%s\n' "$status" | awk -v port="$port" '
+        {
+            line = $0
+            if (line ~ ("(^|] )" port "(/tcp)?[[:space:]]") && line ~ /[[:space:]]ALLOW([[:space:]]|$)/) found = 1
+            if (port == 80 && line ~ /Nginx (Full|HTTP).*ALLOW/) found = 1
+            if (port == 443 && line ~ /Nginx (Full|HTTPS).*ALLOW/) found = 1
+        }
+        END { exit(found ? 0 : 1) }
+    '
+}
+
+installer_firewalld_allows_port() {
+    local port="$1" zone zones
+    zones=$(firewall-cmd --get-active-zones 2>/dev/null | awk 'NF && $0 !~ /^[[:space:]]/ {print $1}')
+    [ -n "$zones" ] || zones=$(firewall-cmd --get-default-zone 2>/dev/null || true)
+    while IFS= read -r zone; do
+        [ -n "$zone" ] || continue
+        firewall-cmd --quiet --zone="$zone" --query-port="${port}/tcp" >/dev/null 2>&1 && return 0
+        case "$port" in
+            80) firewall-cmd --quiet --zone="$zone" --query-service=http >/dev/null 2>&1 && return 0 ;;
+            443) firewall-cmd --quiet --zone="$zone" --query-service=https >/dev/null 2>&1 && return 0 ;;
+        esac
+    done <<< "$zones"
+    return 1
+}
+
+installer_firewall_check_ports() {
+    local port failed=0
+    if command -v ufw >/dev/null 2>&1 && ufw status 2>/dev/null | grep -q '^Status: active'; then
+        for port in "$@"; do
+            if installer_ufw_allows_port "$port"; then
+                log_success "UFW разрешает входящие TCP/${port}."
+            else
+                log_error "UFW не содержит разрешающего правила для TCP/${port}."
+                log_dim "Исправление: ufw allow ${port}/tcp"
+                failed=1
+            fi
+        done
+        [ "$failed" -eq 0 ]
+        return
+    fi
+    if command -v firewall-cmd >/dev/null 2>&1 && firewall-cmd --state 2>/dev/null | grep -q running; then
+        for port in "$@"; do
+            if installer_firewalld_allows_port "$port"; then
+                log_success "firewalld разрешает входящие TCP/${port} в активной зоне."
+            else
+                log_error "firewalld не содержит стандартного разрешения для TCP/${port} в активной зоне."
+                log_dim "Исправление: firewall-cmd --permanent --add-port=${port}/tcp && firewall-cmd --reload"
+                failed=1
+            fi
+        done
+        [ "$failed" -eq 0 ]
+        return
+    fi
+    if command -v nft >/dev/null 2>&1 && nft list ruleset 2>/dev/null | grep -qE 'hook input'; then
+        log_warning "Обнаружен пользовательский nftables: автоматически доказать доступность выбранных портов нельзя."
+        log_dim "Проверьте входящие TCP-порты вручную: $*"
+    fi
+    log_dim "Облачный firewall провайдера локально не виден; выбранные TCP-порты должны быть разрешены и там."
+    return 0
+}
+
 installer_selinux_label() {
     if ! command -v getenforce >/dev/null 2>&1; then
         printf 'не установлен'
@@ -209,6 +277,10 @@ installer_prepare_selinux_http_port() {
     }
     installer_selinux_type_allows_port http_port_t "$port" && return 0
 
+    if [ -z "$INSTALLER_TX_DIR" ] || [ ! -d "$INSTALLER_TX_DIR" ]; then
+        log_error "SELinux-правило нельзя изменить без активной точки отката."
+        return 1
+    fi
     if ! semanage port -a -t http_port_t -p tcp "$port" >/dev/null 2>&1; then
         log_error "SELinux не разрешил nginx слушать TCP/${port}; возможно, порт закреплён за другим типом."
         return 1
@@ -402,11 +474,11 @@ installer_domain_aaaa_records() {
 }
 
 installer_local_global_ipv6() {
-    ip -6 -o addr show scope global 2>/dev/null | awk '{print $4}' | cut -d/ -f1 | head -1
+    ip -6 -o addr show scope global 2>/dev/null | awk '{print $4}' | cut -d/ -f1 | sort -fu
 }
 
 installer_domain_preflight() {
-    local domain="$1" server_ip records aaaa local_v6 owner80 caa public_records resolver
+    local domain="$1" server_ip records aaaa local_v6 owner80 caa public_records resolver record public_verified=0
     validate_domain "$domain" || {
         log_error "Некорректный домен: $domain"
         return 1
@@ -423,7 +495,7 @@ installer_domain_preflight() {
         log_error "A-запись домена ещё не видна. Создайте запись на IP ${server_ip:-этого сервера} и дождитесь распространения DNS."
         return 1
     fi
-    if [ -z "$server_ip" ] || ! printf '%s\n' "$records" | grep -Fxq "$server_ip"; then
+    if [ -z "$server_ip" ] || [ "$records" != "$server_ip" ]; then
         log_error "A-запись ведёт на другой сервер: $(installer_trim_line "$records"). Ожидается: ${server_ip:-не удалось определить}."
         return 1
     fi
@@ -432,20 +504,32 @@ installer_domain_preflight() {
     for resolver in 1.1.1.1 8.8.8.8; do
         public_records=$(dig +time=2 +tries=1 +short "@$resolver" A "$domain" 2>/dev/null | grep -E '^[0-9.]+$' | sort -u)
         [ -z "$public_records" ] && continue
-        if ! printf '%s\n' "$public_records" | grep -Fxq "$server_ip"; then
+        public_verified=$((public_verified + 1))
+        if [ "$public_records" != "$server_ip" ]; then
             log_error "Публичный DNS-резолвер $resolver ещё видит другой IP: $(installer_trim_line "$public_records"). Дождитесь распространения DNS."
             return 1
         fi
     done
+    if [ "$public_verified" -eq 0 ]; then
+        log_error "Не удалось подтвердить A-запись через публичные DNS 1.1.1.1 и 8.8.8.8."
+        log_dim "Проверьте исходящий DNS/UDP 53 и повторите попытку."
+        return 1
+    fi
     log_success "Публичные DNS-резолверы видят правильный IPv4."
 
     aaaa=$(installer_domain_aaaa_records "$domain")
     if [ -n "$aaaa" ]; then
         local_v6=$(installer_local_global_ipv6)
-        if [ -z "$local_v6" ] || ! printf '%s\n' "$aaaa" | grep -Fxiq "$local_v6"; then
-            log_error "У домена есть AAAA-запись ($(installer_trim_line "$aaaa")), но сервер не владеет этим IPv6. Let's Encrypt может прийти по неверному адресу."
+        [ -n "$local_v6" ] || {
+            log_error "У домена есть AAAA-запись ($(installer_trim_line "$aaaa")), но у сервера нет глобального IPv6."
             return 1
-        fi
+        }
+        while IFS= read -r record; do
+            printf '%s\n' "$local_v6" | grep -Fxiq "$record" || {
+                log_error "AAAA-запись $record не принадлежит этому серверу. Let's Encrypt может прийти по неверному адресу."
+                return 1
+            }
+        done <<< "$aaaa"
         log_success "AAAA-запись совпадает с IPv6 сервера."
     else
         log_dim "AAAA-записи нет — это нормально для IPv4-сервера."

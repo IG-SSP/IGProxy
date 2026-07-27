@@ -13,6 +13,15 @@ ADMIN_JS_PATH = ROOT / "admin-web" / "static" / "app.js"
 
 
 class BotFeatureTests(unittest.TestCase):
+    def test_bot_operator_interface_is_russian_only(self):
+        bot = BOT_PATH.read_text(encoding="utf-8")
+        i18n = (ROOT / "gotelegram-bot" / "i18n.py").read_text(encoding="utf-8")
+        self.assertNotIn('callback_data="menu_lang"', bot)
+        self.assertNotIn('callback_data="lang_set_', bot)
+        self.assertNotIn('CommandHandler("lang"', bot)
+        self.assertIn('SUPPORTED_LANGS = ("ru",)', i18n)
+        self.assertIn('return "ru"', i18n)
+
     def test_operator_interfaces_do_not_contain_promotional_links(self):
         sources = [
             BOT_PATH.read_text(encoding="utf-8"),

@@ -3,7 +3,7 @@
 # Colors, logging, spinner, system helpers, v1 compat, i18n-aware
 
 # ── Version ───────────────────────────────────────────────────────────────────
-GOTELEGRAM_VERSION="2.7.25"
+GOTELEGRAM_VERSION="2.7.26"
 GOTELEGRAM_NAME="goTelegram"
 
 # ── Пути ──────────────────────────────────────────────────────────────────────
@@ -67,6 +67,14 @@ log_warning() { echo -e "  ${YELLOW}⚠${NC} $*" >&2; }
 log_error()   { echo -e "  ${RED}✗${NC} $*" >&2; }
 log_step()    { echo -e "\n${BOLD}${WHITE}  $*${NC}" >&2; }
 log_dim()     { echo -e "  ${DIM}$*${NC}" >&2; }
+
+human_mode_name() {
+    case "${1:-}" in
+        pro) printf 'Свой домен и сайт' ;;
+        lite) printf 'Только прокси' ;;
+        *) printf '%s' "${1:-не настроен}" ;;
+    esac
+}
 
 log_to_file() {
     local ts; ts=$(date '+%Y-%m-%d %H:%M:%S')

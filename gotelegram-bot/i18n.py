@@ -27,8 +27,9 @@ USER_LANG_FILE = Path("/opt/gotelegram-bot/user_langs.json")
 GOTELEGRAM_CONFIG = Path("/opt/gotelegram/config.json")
 GOTELEGRAM_LANG_MARKER = Path("/opt/gotelegram/.language")
 
-# Supported codes; keep in sync with lang/*.json
-SUPPORTED_LANGS = ("en", "ru")
+# Операторский интерфейс фиксирован на русском; старые пользовательские
+# настройки языка игнорируются ради предсказуемого единого интерфейса.
+SUPPORTED_LANGS = ("ru",)
 
 
 def _detect_default_lang() -> str:
@@ -51,7 +52,7 @@ def _detect_default_lang() -> str:
         code = str(raw or "").strip().lower()
         if code in SUPPORTED_LANGS:
             return code
-    return "en"
+    return "ru"
 
 
 DEFAULT_LANG = _detect_default_lang()
@@ -121,12 +122,8 @@ def _save_user_langs() -> None:
 # ── Public API ────────────────────────────────────────────────────────────
 
 def get_user_lang(user_id: Optional[int]) -> str:
-    """Return the language code for the given user (or DEFAULT_LANG)."""
-    if not _USER_LANGS_LOADED:
-        _load_user_langs()
-    if user_id is None:
-        return _detect_default_lang()
-    return _USER_LANGS.get(int(user_id), _detect_default_lang())
+    """Return the only supported operator language."""
+    return "ru"
 
 
 def set_user_lang(user_id: int, code: str) -> bool:
@@ -134,7 +131,7 @@ def set_user_lang(user_id: int, code: str) -> bool:
     if not _USER_LANGS_LOADED:
         _load_user_langs()
     code = (code or "").strip().lower()
-    if code not in SUPPORTED_LANGS:
+    if code != "ru":
         return False
     _USER_LANGS[int(user_id)] = code
     _save_user_langs()
@@ -146,15 +143,10 @@ def get_language_name(code: str) -> str:
 
 
 def t(user_id: Optional[int], key: str, default: Optional[str] = None) -> str:
-    """Translate key for the given user. Falls back to English, then default/key."""
-    code = get_user_lang(user_id)
-    table = _load_lang_file(code)
+    """Translate a key using the Russian operator dictionary."""
+    table = _load_lang_file("ru")
     if key in table:
         return table[key]
-    if code != "en":
-        en_table = _load_lang_file("en")
-        if key in en_table:
-            return en_table[key]
     return default if default is not None else key
 
 
