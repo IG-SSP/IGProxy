@@ -662,7 +662,12 @@ EOF
 
 igproxy_site_preset_definition() {
     local wanted="$1"
-    igproxy_site_preset_rows | awk -F'|' -v wanted="$wanted" '$1 == wanted { print; found=1; exit } END { exit(found ? 0 : 1) }'
+    # Do not exit awk early here. With the installer's `set -o pipefail`, an
+    # early exit closes the pipe while `cat` is still writing the preset list;
+    # `cat` then receives SIGPIPE and the otherwise successful lookup is
+    # reported as a failure.
+    igproxy_site_preset_rows |
+        awk -F'|' -v wanted="$wanted" '$1 == wanted && !found { print; found=1 } END { exit(found ? 0 : 1) }'
 }
 
 interactive_igproxy_site_preset_selection() {

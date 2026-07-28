@@ -382,6 +382,11 @@ printf '0\\n' | installer_preflight_run interactive
         common = (ROOT / "lib" / "common.sh").read_text(encoding="utf-8")
         self.assertIn("flock python3)", common)
 
+    def test_config_merge_reads_installed_at_from_slurped_object(self):
+        common = (ROOT / "lib" / "common.sh").read_text(encoding="utf-8")
+        self.assertIn("installed_at: ($existing[0].installed_at // $now)", common)
+        self.assertNotIn("installed_at: ($existing.installed_at // $now)", common)
+
     def test_interactive_steps_clear_the_terminal(self):
         ui = (ROOT / "lib" / "installer_ui.sh").read_text(encoding="utf-8")
         wizard = WIZARD.read_text(encoding="utf-8")

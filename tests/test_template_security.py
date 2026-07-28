@@ -24,11 +24,16 @@ class TemplateSecurityTests(unittest.TestCase):
             cache = Path(raw) / "cache"
             proxy_link = "https://t.me/proxy?server=example.com&port=9443&secret=eeabc"
             script = f"""
+set -uo pipefail
 IGPROXY_SITE_PRESETS_DIR={(ROOT / "site-presets").as_posix()!r}
 TEMPLATES_CACHE={cache.as_posix()!r}
 log_error() {{ printf '%s\\n' "$*" >&2; }}
 log_dim() {{ :; }}
 source {TEMPLATES.as_posix()!r}
+igproxy_site_preset_rows() {{
+    printf '%s\\n' 'story-transit|Test|Test|random-gallery|transit'
+    python3 -c 'print("unused|x|x|random-gallery|auto\\n" * 20000, end="")'
+}}
 prepare_igproxy_site_preset story-transit {proxy_link!r}
 """
             result = subprocess.run(

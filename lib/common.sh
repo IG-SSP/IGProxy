@@ -641,7 +641,7 @@ save_gotelegram_config() {
             domain: $domain,
             template_id: $template_id,
             language: $language,
-            installed_at: ($existing.installed_at // $now),
+            installed_at: ($existing[0].installed_at // $now),
             updated_at: $now
         }' > "$tmp" || {
             exec 9>&-

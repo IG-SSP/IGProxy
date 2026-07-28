@@ -9,6 +9,8 @@ import hashlib
 import io
 import os
 from pathlib import Path, PurePosixPath
+import re
+import subprocess
 import tarfile
 
 
@@ -26,19 +28,57 @@ PAYLOAD_PATHS = (
     "INSTALLER_GUIDE.md",
 )
 
+FORBIDDEN_RELEASE_NAMES = {
+    ".env",
+    "id_dsa",
+    "id_ecdsa",
+    "id_ed25519",
+    "id_rsa",
+}
+FORBIDDEN_RELEASE_SUFFIXES = {".key", ".p12", ".pfx"}
+FORBIDDEN_RELEASE_CONTENT = (
+    ("private key", re.compile(rb"-----BEGIN (?:OPENSSH |RSA |EC |DSA )?PRIVATE KEY-----")),
+    ("GitHub token", re.compile(rb"(?:github_pat_|gh[pousr]_[A-Za-z0-9_]{20,})")),
+    ("Telegram bot token", re.compile(rb"\b[0-9]{8,12}:[A-Za-z0-9_-]{25,}\b")),
+    (
+        "configured proxy URL",
+        re.compile(rb"(?:tg://proxy|https?://t\.me/proxy)\?[^\s\"']*secret=[A-Za-z0-9_-]{16,}"),
+    ),
+)
+
+
+def validate_release_file(path: Path, name: PurePosixPath) -> None:
+    lower_name = name.name.lower()
+    if lower_name in FORBIDDEN_RELEASE_NAMES or name.suffix.lower() in FORBIDDEN_RELEASE_SUFFIXES:
+        raise RuntimeError(f"refusing to package sensitive filename: {name.as_posix()}")
+    payload = path.read_bytes()
+    for label, pattern in FORBIDDEN_RELEASE_CONTENT:
+        if pattern.search(payload):
+            raise RuntimeError(f"refusing to package {label} in {name.as_posix()}")
+
 
 def payload_files() -> list[tuple[Path, PurePosixPath]]:
-    files: list[tuple[Path, PurePosixPath]] = []
     for relative in PAYLOAD_PATHS:
-        source = ROOT / relative
-        if source.is_file():
-            files.append((source, PurePosixPath(relative)))
-        elif source.is_dir():
-            for child in sorted(source.rglob("*")):
-                if child.is_file() and "__pycache__" not in child.parts:
-                    files.append((child, PurePosixPath(child.relative_to(ROOT).as_posix())))
-        else:
+        if not (ROOT / relative).exists():
             raise FileNotFoundError(f"required release path is missing: {relative}")
+
+    result = subprocess.run(
+        ["git", "-C", str(ROOT), "ls-files", "-z", "--", *PAYLOAD_PATHS],
+        check=True,
+        capture_output=True,
+    )
+    tracked = [item for item in result.stdout.split(b"\0") if item]
+    if not tracked:
+        raise RuntimeError("git returned an empty release manifest")
+
+    files: list[tuple[Path, PurePosixPath]] = []
+    for raw_name in tracked:
+        relative = PurePosixPath(raw_name.decode("utf-8"))
+        source = ROOT.joinpath(*relative.parts)
+        if not source.is_file():
+            raise FileNotFoundError(f"tracked release file is missing: {relative.as_posix()}")
+        validate_release_file(source, relative)
+        files.append((source, relative))
     return sorted(files, key=lambda item: item[1].as_posix())
 
 

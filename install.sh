@@ -274,28 +274,41 @@ menu_version() {
 snapshot_preupgrade_state() {
     local marker="$GOTELEGRAM_DIR/.preupgrade_${GOTELEGRAM_VERSION}_done"
     [ -f "$marker" ] && return 0
-    mkdir -p "$BACKUP_DIR"
+    (
+        umask 077
+        mkdir -p -m 700 -- "$BACKUP_DIR" || exit 1
+        chmod 700 -- "$BACKUP_DIR" || exit 1
 
-    local ts tmp archive
-    ts=$(date +%Y%m%d_%H%M%S)
-    tmp="/tmp/gotelegram_preupgrade_${ts}"
-    archive="$BACKUP_DIR/preupgrade_${GOTELEGRAM_VERSION}_${ts}.tar.gz"
-    mkdir -p "$tmp"
+        local ts tmp archive archive_tmp
+        ts=$(date +%Y%m%d_%H%M%S)
+        tmp=$(mktemp -d /tmp/gotelegram-preupgrade.XXXXXX) || exit 1
+        cleanup_preupgrade_snapshot() {
+            case "${tmp:-}" in
+                /tmp/gotelegram-preupgrade.*) rm -rf -- "$tmp" ;;
+            esac
+            [ -n "${archive_tmp:-}" ] && rm -f -- "$archive_tmp"
+        }
+        trap cleanup_preupgrade_snapshot EXIT INT TERM HUP
+        archive="$BACKUP_DIR/preupgrade_${GOTELEGRAM_VERSION}_${ts}.tar.gz"
+        archive_tmp=$(mktemp "$BACKUP_DIR/.preupgrade_${GOTELEGRAM_VERSION}.XXXXXX") || exit 1
 
-    [ -f "$GOTELEGRAM_CONFIG" ] && mkdir -p "$tmp/opt/gotelegram" && cp "$GOTELEGRAM_CONFIG" "$tmp/opt/gotelegram/config.json" 2>/dev/null
-    [ -f "$TELEMT_CONFIG" ] && mkdir -p "$tmp/etc/telemt" && cp "$TELEMT_CONFIG" "$tmp/etc/telemt/config.toml" 2>/dev/null
-    if [ -f "$NGINX_SITE_CONF" ]; then
-        mkdir -p "$tmp$(dirname "$NGINX_SITE_CONF")"
-        cp "$NGINX_SITE_CONF" "$tmp$NGINX_SITE_CONF" 2>/dev/null
-    fi
-    [ -d "$WEBSITE_ROOT" ] && mkdir -p "$tmp/var/www/gotelegram-site" && cp -a "$WEBSITE_ROOT/." "$tmp/var/www/gotelegram-site/" 2>/dev/null
-    [ -f "$BOT_DIR/.env" ] && mkdir -p "$tmp/opt/gotelegram-bot" && cp "$BOT_DIR/.env" "$tmp/opt/gotelegram-bot/.env" 2>/dev/null
+        [ -f "$GOTELEGRAM_CONFIG" ] && mkdir -p "$tmp/opt/gotelegram" && cp "$GOTELEGRAM_CONFIG" "$tmp/opt/gotelegram/config.json" 2>/dev/null
+        [ -f "$TELEMT_CONFIG" ] && mkdir -p "$tmp/etc/telemt" && cp "$TELEMT_CONFIG" "$tmp/etc/telemt/config.toml" 2>/dev/null
+        if [ -f "$NGINX_SITE_CONF" ]; then
+            mkdir -p "$tmp$(dirname "$NGINX_SITE_CONF")"
+            cp "$NGINX_SITE_CONF" "$tmp$NGINX_SITE_CONF" 2>/dev/null
+        fi
+        [ -d "$WEBSITE_ROOT" ] && mkdir -p "$tmp/var/www/gotelegram-site" && cp -a "$WEBSITE_ROOT/." "$tmp/var/www/gotelegram-site/" 2>/dev/null
+        [ -f "$BOT_DIR/.env" ] && mkdir -p "$tmp/opt/gotelegram-bot" && cp "$BOT_DIR/.env" "$tmp/opt/gotelegram-bot/.env" 2>/dev/null
 
-    if tar czf "$archive" -C "$tmp" . 2>/dev/null; then
-        log_dim "Pre-upgrade snapshot: $archive"
-        touch "$marker" 2>/dev/null || true
-    fi
-    rm -rf "$tmp"
+        if tar czf "$archive_tmp" -C "$tmp" . 2>/dev/null; then
+            chmod 600 -- "$archive_tmp"
+            mv -f -- "$archive_tmp" "$archive"
+            archive_tmp=""
+            log_dim "Pre-upgrade snapshot: $archive"
+            touch "$marker" 2>/dev/null || true
+        fi
+    )
 }
 
 read_config_or_default() {
