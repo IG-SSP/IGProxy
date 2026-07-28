@@ -694,6 +694,11 @@ interactive_igproxy_site_preset_selection() {
 
 prepare_igproxy_site_preset() {
     local preset_id="$1" proxy_link="$2" definition source_id layout output_dir page
+    command -v python3 >/dev/null 2>&1 || {
+        log_error "Для подготовки встроенной витрины нужен python3."
+        log_dim "Установите пакет python3 и повторите запуск IGProxy."
+        return 1
+    }
     [[ "$preset_id" =~ ^[a-z0-9-]+$ ]] || return 1
     definition=$(igproxy_site_preset_definition "$preset_id") || return 1
     IFS='|' read -r _ _ _ source_id layout <<< "$definition"
@@ -706,10 +711,16 @@ prepare_igproxy_site_preset() {
     mkdir -p -m 700 "$TEMPLATES_CACHE"
     rm -rf -- "$output_dir"
     mkdir -p -m 700 "$output_dir"
-    cp -a "$IGPROXY_SITE_PRESETS_DIR/$source_id/." "$output_dir/" || return 1
+    cp -a "$IGPROXY_SITE_PRESETS_DIR/$source_id/." "$output_dir/" || {
+        log_error "Не удалось скопировать встроенную витрину $preset_id."
+        return 1
+    }
 
     while IFS= read -r -d '' page; do
-        python3 - "$page" "$layout" 3<<< "$proxy_link" <<'PY' || return 1
+        python3 - "$page" "$layout" 3<<< "$proxy_link" <<'PY' || {
+            log_error "Не удалось подготовить HTML встроенной витрины $preset_id."
+            return 1
+        }
 import pathlib
 import sys
 

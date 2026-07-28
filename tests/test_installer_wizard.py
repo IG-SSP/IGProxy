@@ -172,6 +172,16 @@ installer_preflight_json
         self.assertEqual(result.stdout.strip(), "lite")
         self.assertIn("Что установить?", result.stderr)
 
+    def test_mode_zero_returns_to_previous_step(self):
+        result = run_bash("printf '0\\n' | installer_choose_mode")
+        self.assertEqual(result.returncode, 10, result.stderr)
+        install = INSTALL.read_text(encoding="utf-8")
+        ui = (ROOT / "lib" / "installer_ui.sh").read_text(encoding="utf-8")
+        self.assertIn('[ "$selection_status" -eq 10 ]', install)
+        self.assertIn('DEPLOYMENT_ROLE=""', install)
+        self.assertIn("read -r -s -n 1 answer", ui)
+        self.assertIn("Назад", ui)
+
     def test_operator_installation_is_russian_only(self):
         install = INSTALL.read_text(encoding="utf-8")
         self.assertIn('load_language "ru"', install)
@@ -290,6 +300,8 @@ installer_preflight_json
         self.assertIn("random-gallery|Рандомный сайт", templates)
         self.assertIn("story-playground|Сад воздушных троп", templates)
         self.assertIn("Все варианты хранятся локально", templates)
+        common = (ROOT / "lib" / "common.sh").read_text(encoding="utf-8")
+        self.assertIn("flock python3)", common)
 
     def test_interactive_steps_clear_the_terminal(self):
         ui = (ROOT / "lib" / "installer_ui.sh").read_text(encoding="utf-8")

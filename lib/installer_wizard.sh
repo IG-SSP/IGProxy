@@ -679,7 +679,7 @@ installer_choose_mode() {
     case "${choice:-2}" in
         1) printf 'pro\n' ;;
         2) printf 'lite\n' ;;
-        0) return 1 ;;
+        0) return 10 ;;
         *) log_error "Выберите 1, 2 или 0."; return 1 ;;
     esac
 }

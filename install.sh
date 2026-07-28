@@ -738,31 +738,65 @@ show_upgrade_changelog() {
 }
 
 menu_install() {
-    local selected_role existing_role selected_mode=""
+    local selected_role existing_role selected_mode="" role_locked=0
+    local disclaimer_accepted=0 selection_status=0
     INSTALLER_APPLY_COMPLETED=0
     INSTALLER_DEFER_COMMIT=1
     existing_role=$(config_get deployment_role 2>/dev/null || true)
     if [ -n "$existing_role" ] && type cluster_valid_role >/dev/null 2>&1 &&
        cluster_valid_role "$existing_role"; then
         DEPLOYMENT_ROLE="$existing_role"
+        role_locked=1
         if type ig_ui_logo >/dev/null 2>&1; then
             ig_ui_logo "Безопасное обновление"
             ig_ui_status ok "Найдена существующая установка" \
                 "$(installer_role_title "$existing_role") · ключи будут сохранены"
         fi
     else
-        DEPLOYMENT_ROLE=$(installer_choose_deployment_role) || return
-    fi
-    export DEPLOYMENT_ROLE
-
-    if type installer_preflight_run >/dev/null 2>&1; then
-        installer_preflight_run || return
+        DEPLOYMENT_ROLE=""
     fi
 
-    # Дисклеймер и любые записи — только после полностью read-only preflight.
-    show_disclaimer --gate || return
+    while true; do
+        if [ "$role_locked" != "1" ]; then
+            if DEPLOYMENT_ROLE=$(installer_choose_deployment_role); then
+                :
+            else
+                return
+            fi
+        fi
+        export DEPLOYMENT_ROLE
 
-    # Миграция допускается только после read-only preflight.
+        if type installer_preflight_run >/dev/null 2>&1; then
+            installer_preflight_run || return
+        fi
+
+        # Дисклеймер и любые записи — только после полностью read-only preflight.
+        if [ "$disclaimer_accepted" != "1" ]; then
+            show_disclaimer --gate || return
+            disclaimer_accepted=1
+        fi
+
+        if type installer_choose_mode >/dev/null 2>&1; then
+            selected_mode=""
+            selected_mode=$(installer_choose_mode)
+            selection_status=$?
+            if [ "$selection_status" -eq 0 ]; then
+                break
+            fi
+            if [ "$selection_status" -eq 10 ]; then
+                [ "$role_locked" = "1" ] && return
+                DEPLOYMENT_ROLE=""
+                continue
+            fi
+            return
+        else
+            selected_mode="lite"
+            break
+        fi
+    done
+
+    # Миграция допускается только после read-only preflight и окончательного
+    # выбора роли/режима.
     if detect_v1_installation; then
         echo ""
         echo -e "  ${YELLOW}$(t v1_detected)${NC}"
@@ -771,11 +805,6 @@ menu_install() {
         migrate_v1_to_v2 || return
     fi
 
-    if type installer_choose_mode >/dev/null 2>&1; then
-        selected_mode=$(installer_choose_mode) || return
-    else
-        selected_mode="lite"
-    fi
     case "$selected_mode" in
         pro) install_pro_mode ;;
         lite) install_lite_mode ;;

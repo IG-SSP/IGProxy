@@ -3,7 +3,7 @@
 # Colors, logging, spinner, system helpers, v1 compat, i18n-aware
 
 # ── Version ───────────────────────────────────────────────────────────────────
-GOTELEGRAM_VERSION="2.13.1"
+GOTELEGRAM_VERSION="2.13.2"
 GOTELEGRAM_NAME="IGProxy"
 
 # ── Пути ──────────────────────────────────────────────────────────────────────
@@ -395,7 +395,7 @@ ensure_deps() {
     # flock используется bot_action_dispatch для сериализации параллельных
     # вызовов (иначе гонка на config.json при одновременных change-template /
     # change-lite-domain из бота).
-    local critical=(curl jq openssl gpg git xxd tar dig flock)
+    local critical=(curl jq openssl gpg git xxd tar dig flock python3)
     # Желательные — есть fallback, устанавливать всё равно, но не падать если не смогли
     local optional=(qrencode bc iptables)
 

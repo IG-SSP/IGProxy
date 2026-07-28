@@ -159,11 +159,19 @@ ig_ui_select() {
         ig_ui_option "$i" "$title" "$description" "$badge"
         i=$((i + 1))
     done
+    printf '\n  %s0%s  %sНазад%s\n' \
+        "$IG_UI_MUTED" "$IG_UI_RESET" "$IG_UI_MUTED" "$IG_UI_RESET" >&2
     while true; do
         printf '\n  %s%s%s %s[%s]:%s ' \
             "$IG_UI_CYAN" "$(ig_ui_symbol "❯" ">")" "$IG_UI_RESET" \
             "$prompt" "$default_index" "$IG_UI_RESET" >&2
-        IFS= read -r answer < "$IG_UI_TTY" || answer=""
+        if [ "$count" -le 9 ] &&
+           { [ -t 0 ] || [ "$IG_UI_TTY" = "/dev/tty" ]; }; then
+            IFS= read -r -s -n 1 answer < "$IG_UI_TTY" || answer=""
+            printf '\n' >&2
+        else
+            IFS= read -r answer < "$IG_UI_TTY" || answer=""
+        fi
         answer="${answer:-$default_index}"
         if [[ "$answer" =~ ^[0-9]+$ ]] && [ "$answer" -ge 1 ] && [ "$answer" -le "$count" ]; then
             IFS='|' read -r value title description badge <<< "${options[$((answer - 1))]}"
@@ -171,7 +179,7 @@ ig_ui_select() {
             return 0
         fi
         if [ "$answer" = "0" ] || [ "$answer" = "q" ] || [ "$answer" = "Q" ]; then
-            return 1
+            return 10
         fi
         printf '  %s%s Выберите пункт от 1 до %s.%s\n' \
             "$IG_UI_YELLOW" "$(ig_ui_symbol "!" "!")" "$count" "$IG_UI_RESET" >&2
