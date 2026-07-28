@@ -110,7 +110,7 @@ def _read_gotelegram_version() -> str:
                 return str(_v)
     except Exception:
         pass
-    return "2.14.0"
+    return "2.15.0"
 
 
 GOTELEGRAM_VERSION = _read_gotelegram_version()
@@ -398,6 +398,38 @@ def save_json(path: str, data: Dict) -> bool:
         logger.error(f"Failed to save {path}: {e}")
         return False
     finally:
+        if temp_path:
+            try:
+                os.unlink(temp_path)
+            except OSError:
+                pass
+
+
+def atomic_write_sensitive_text(path: str, content: str) -> None:
+    """Atomically replace a secret-bearing file with mode 0600 from creation."""
+    directory = os.path.dirname(path)
+    os.makedirs(directory, exist_ok=True)
+    fd, temp_path = tempfile.mkstemp(prefix=f".{os.path.basename(path)}.", dir=directory)
+    try:
+        os.fchmod(fd, 0o600)
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            fd = -1
+            handle.write(content)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temp_path, path)
+        temp_path = ""
+        try:
+            dir_fd = os.open(directory, os.O_RDONLY)
+            try:
+                os.fsync(dir_fd)
+            finally:
+                os.close(dir_fd)
+        except OSError:
+            pass
+    finally:
+        if fd >= 0:
+            os.close(fd)
         if temp_path:
             try:
                 os.unlink(temp_path)
@@ -1074,6 +1106,23 @@ async def admin_overview_get() -> Dict[str, Any]:
         return {}
 
 
+async def admin_health_get() -> Dict[str, Any]:
+    """Read the cached Telegram DC health snapshot from the local admin."""
+    code, stdout, _ = await sh(
+        "curl", "-sS", "--max-time", "5",
+        f"http://127.0.0.1:{ADMIN_WEB_PORT}/api/health",
+        timeout=7,
+    )
+    if code != 0 or not stdout.strip():
+        return {}
+    try:
+        payload = json.loads(stdout)
+        data = payload.get("data", payload) if isinstance(payload, dict) else {}
+        return data if isinstance(data, dict) else {}
+    except json.JSONDecodeError:
+        return {}
+
+
 def recent_proxy_rate() -> float:
     """Calculate the latest measured proxy speed from cumulative snapshots."""
     rows: List[Tuple[int, int]] = []
@@ -1113,15 +1162,24 @@ async def get_status_text(user_id: Optional[int] = None) -> str:
         online_keys += int(current > 0)
     running = sum(1 for value in services.values() if value == "running")
     cluster_nodes = config.get("cluster_nodes") if isinstance(config.get("cluster_nodes"), list) else []
+    network_line = ""
     if cluster_nodes:
-        dc_count = 1 + sum(
+        online_nodes = 1 + sum(
             1 for item in cluster_nodes
             if isinstance(item, dict)
             and bool(item.get("approved", True))
             and int(time.time()) - int(item.get("last_seen") or 0) <= 180
         )
+        network_line = f"<b>Серверы IGProxy:</b> {online_nodes}/{1 + len(cluster_nodes)} в сети"
     else:
-        dc_count = max(1, int(config.get("network_dc_count") or 1))
+        health = await admin_health_get()
+        dc = health.get("dc", {}) if isinstance(health.get("dc"), dict) else {}
+        groups = dc.get("groups", []) if isinstance(dc.get("groups"), list) else []
+        if groups:
+            reachable_groups = sum(1 for item in groups if isinstance(item, dict) and int(item.get("reachable") or 0) > 0)
+            network_line = f"<b>Telegram DC:</b> {reachable_groups}/{len(groups)} доступны"
+        else:
+            network_line = "<b>Telegram DC:</b> данные ещё собираются"
     port = int(config.get("port") or 443)
     appearance = get_appearance()
     status_title = (
@@ -1138,7 +1196,7 @@ async def get_status_text(user_id: Optional[int] = None) -> str:
         f"<b>Ключи:</b> {len(users)} всего · {online_keys} сейчас активны",
         f"<b>Подключения:</b> {connections} · активных IP: {active_ips}",
         f"<b>Скорость прокси:</b> {format_bytes_human(int(recent_proxy_rate()))}/с",
-        f"<b>DC в сети:</b> {dc_count}",
+        network_line,
         "",
         f"<b>CPU:</b> {float(system.get('cpu_percent') or 0):.0f}% · "
         f"load {float((system.get('load') or [0])[0] or 0):.2f}",
@@ -1995,11 +2053,7 @@ def save_toml_int_table(table: str, values: Dict[str, int]) -> bool:
                 out.append("")
             out.append(header)
             out.extend(rendered)
-        tmp = f"{TELEMT_CONFIG}.tmp"
-        with open(tmp, "w", encoding="utf-8") as f:
-            f.write("\n".join(out).rstrip() + "\n")
-        os.chmod(tmp, 0o600)
-        os.replace(tmp, TELEMT_CONFIG)
+        atomic_write_sensitive_text(TELEMT_CONFIG, "\n".join(out).rstrip() + "\n")
         return True
     except Exception as e:
         logger.error(f"Failed to save telemt int table {table}: {e}")
@@ -2050,11 +2104,7 @@ def save_telemt_users(users: Dict[str, str]) -> bool:
                 out.append("")
             out.append("[access.users]")
             out.extend(rendered)
-        tmp = f"{TELEMT_CONFIG}.tmp"
-        with open(tmp, "w", encoding="utf-8") as f:
-            f.write("\n".join(out).rstrip() + "\n")
-        os.chmod(tmp, 0o600)
-        os.replace(tmp, TELEMT_CONFIG)
+        atomic_write_sensitive_text(TELEMT_CONFIG, "\n".join(out).rstrip() + "\n")
         return True
     except Exception as e:
         logger.error(f"Failed to save telemt users: {e}")

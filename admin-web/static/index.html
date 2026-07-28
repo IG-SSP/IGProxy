@@ -502,9 +502,10 @@
                 </div>
               </div>
               <form id="generalSettingsForm" class="settings-form">
-                <label>Количество DC в сети
-                  <input id="networkDcCount" type="number" min="1" max="999" value="1">
-                </label>
+                <div class="settings-help-card">
+                  <strong>Сеть определяется автоматически</strong>
+                  <span>IGProxy считает доступные Telegram DC по конфигурации telemt, а серверы IGProxy — по состоянию кластера. Ручное число больше не требуется.</span>
+                </div>
                 <label class="setting-check"><input id="brandEnabled" type="checkbox" checked> Показывать название проекта</label>
                 <label>Название проекта
                   <input id="brandNameInput" type="text" maxlength="48" value="IGProxy" placeholder="IGProxy">
@@ -516,6 +517,17 @@
                 <label>Ссылка на канал
                   <input id="sponsorUrl" type="url" placeholder="https://t.me/channel">
                 </label>
+                <div class="settings-subsection">
+                  <div>
+                    <strong>Спонсорский канал MTProxy</strong>
+                    <span>Нативное продвижение канала через telemt. Это не кнопка канала в меню бота.</span>
+                  </div>
+                  <label class="setting-check"><input id="proxySponsorEnabled" type="checkbox"> Включить sponsor tag</label>
+                  <label>Tag от @MTProxybot
+                    <input id="proxySponsorTag" type="text" inputmode="text" maxlength="32" autocomplete="off" placeholder="32 шестнадцатеричных символа">
+                  </label>
+                  <small>Получите tag командой <b>/newproxy</b> у @MTProxybot, сохраните здесь, затем выберите канал через <b>/myproxies → Set promotion</b>. Ссылка, которую выдаёт бот при регистрации, для подключения не используется.</small>
+                </div>
                 <button type="submit">Сохранить</button>
               </form>
             </section>
@@ -556,6 +568,7 @@
             </div>
             <p class="panel-note">Выберите готовую аллегорическую витрину и ключ, который будет подключаться по большой кнопке на сайте.</p>
             <form id="siteSettingsForm" class="site-settings-form">
+              <div class="site-gallery-summary"><strong>30 разных тематических сайтов</strong><span>Каждый отличается композицией, палитрой, анимацией и собственной подсказкой подключения.</span></div>
               <div id="sitePresetCards" class="site-preset-cards"></div>
               <label>Ключ для кнопки
                 <select id="siteKey"></select>

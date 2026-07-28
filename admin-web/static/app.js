@@ -1129,6 +1129,11 @@ function renderOverview() {
     $("#sponsorEnabled").checked = Boolean(cfg.sponsor_enabled);
     $("#sponsorName").value = cfg.sponsor_name || "Спонсорский канал";
     $("#sponsorUrl").value = cfg.sponsor_url || "";
+    $("#proxySponsorEnabled").checked = Boolean(cfg.proxy_sponsor_enabled);
+    $("#proxySponsorTag").value = "";
+    $("#proxySponsorTag").placeholder = cfg.proxy_sponsor_configured
+      ? "Tag настроен · оставьте поле пустым, чтобы сохранить"
+      : "32 шестнадцатеричных символа";
   }
   const stats = data.stats_current || {};
   const system = data.system || {};
@@ -1161,10 +1166,9 @@ function renderOverview() {
     ? `${clusterOnline}/${1 + clusterNodes.length}`
     : (state.health?.dc?.available
       ? `${state.health.dc.reachable || 0}/${state.health.dc.total || 0}`
-      : (cfg.network_dc_count || 1));
+      : "авто");
   $("#portConnections").textContent = liveConnections;
   $("#portActiveIps").textContent = activeIps;
-  if (!state.generalSettingsDirty) $("#networkDcCount").value = cfg.network_dc_count || 1;
   $("#metricUsers").textContent = data.users_count ?? 0;
   $("#metricProxyTraffic").textContent = fmtBytes(stats.proxy_bytes);
   $("#metricProxyPackets").textContent = `${stats.proxy_pkts || 0} ${t("packets")}`;
@@ -1831,13 +1835,33 @@ function renderSiteSettings() {
   const data = state.siteSettings;
   if (!data) return;
   if (!state.selectedSitePreset) state.selectedSitePreset = data.preset || data.presets?.[0]?.id || "";
-  $("#sitePresetCards").innerHTML = (data.presets || []).map((preset) => `
-    <button type="button" class="site-preset-card ${preset.id === state.selectedSitePreset ? "active" : ""}"
-      data-site-preset="${escapeAttr(preset.id)}" ${preset.available ? "" : "disabled"}>
-      <strong>${escapeHtml(preset.name)}</strong>
-      <span>${escapeHtml(preset.description)}</span>
-    </button>
-  `).join("");
+  const symbols = {
+    editorial:"🦉", transit:"🚋", cartography:"🌧️", terminal:"⌁", botanical:"🌿",
+    postcard:"✉️", tearoom:"🫖", beacon:"◉", poster:"🎺", playground:"🐌",
+    observatory:"🔭", blueprint:"📐", cassette:"📼", metrocard:"🎫", museum:"🖼️",
+    weather:"🌤️", chess:"♞", bakery:"🥐", aquarium:"🐠", courier:"📦",
+    planetarium:"🪐", switchboard:"☎️", typewriter:"⌨️", harbor:"⛵", laboratory:"🧪",
+    calendar:"28", vinyl:"◉", constellation:"✨", semaphore:"🚦", snowglobe:"❄️",
+    auto:"30",
+  };
+  const groups = [
+    ["random", "Режим показа"],
+    ["story", "30 тематических витрин"],
+    ["authored", "Авторские страницы"],
+  ];
+  $("#sitePresetCards").innerHTML = groups.map(([kind, title]) => {
+    const presets = (data.presets || []).filter((preset) => preset.kind === kind);
+    if (!presets.length) return "";
+    return `<section class="site-preset-group"><header><strong>${title}</strong><span>${presets.length}</span></header><div class="site-preset-grid">${presets.map((preset) => `
+      <button type="button" class="site-preset-card ${preset.id === state.selectedSitePreset ? "active" : ""}"
+        data-site-preset="${escapeAttr(preset.id)}" data-layout="${escapeAttr(preset.layout || "")}" ${preset.available ? "" : "disabled"}>
+        <span class="site-preset-preview"><i>${escapeHtml(symbols[preset.layout] || "↗")}</i><b></b><b></b><b></b></span>
+        <span class="site-preset-copy"><strong>${escapeHtml(preset.name)}</strong><small>${escapeHtml(preset.description)}</small></span>
+        <em>${preset.id === "route-workshop"
+          ? (preset.id === state.selectedSitePreset ? "Рекомендуем · выбран" : "Рекомендуем")
+          : (preset.id === state.selectedSitePreset ? "Выбран" : "Выбрать")}</em>
+      </button>`).join("")}</div></section>`;
+  }).join("");
   const enabledKeys = (data.keys || []).filter((item) => item.enabled);
   $("#siteKey").innerHTML = enabledKeys.map((item) => `
     <option value="${escapeAttr(item.name)}" ${item.name === data.key ? "selected" : ""}>${escapeHtml(item.name)}</option>
@@ -1891,12 +1915,13 @@ async function saveGeneralSettings() {
   await api("/api/settings/general", {
     method: "POST",
     body: JSON.stringify({
-      network_dc_count: Number($("#networkDcCount").value) || 1,
       brand_enabled: $("#brandEnabled").checked,
       brand_name: $("#brandNameInput").value.trim(),
       sponsor_enabled: $("#sponsorEnabled").checked,
       sponsor_name: $("#sponsorName").value.trim(),
       sponsor_url: $("#sponsorUrl").value.trim(),
+      proxy_sponsor_enabled: $("#proxySponsorEnabled").checked,
+      proxy_sponsor_tag: $("#proxySponsorTag").value.trim(),
     }),
   });
   state.generalSettingsDirty = false;

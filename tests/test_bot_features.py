@@ -137,6 +137,13 @@ class BotFeatureTests(unittest.TestCase):
         self.assertIn('config.get("sponsor_enabled", False)', source)
         self.assertIn('config.get("sponsor_url")', source)
 
+    def test_telemt_writers_use_private_atomic_tempfiles(self):
+        source = BOT_PATH.read_text(encoding="utf-8")
+        self.assertIn("def atomic_write_sensitive_text", source)
+        self.assertIn("os.fchmod(fd, 0o600)", source)
+        self.assertIn("os.fsync(handle.fileno())", source)
+        self.assertNotIn('tmp = f"{TELEMT_CONFIG}.tmp"', source)
+
     def test_stats_view_does_not_reinitialize_firewall_counters(self):
         source = BOT_PATH.read_text(encoding="utf-8")
         stats_body = re.search(

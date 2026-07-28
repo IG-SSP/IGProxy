@@ -429,6 +429,12 @@ class AdminFeatureTests(unittest.TestCase):
         server = (ROOT / "admin-web" / "server.py").read_text(encoding="utf-8")
         self.assertIn('id="brandEnabled"', html)
         self.assertIn('id="sponsorUrl"', html)
+        self.assertIn('id="proxySponsorEnabled"', html)
+        self.assertIn('id="proxySponsorTag"', html)
+        self.assertNotIn('id="networkDcCount"', html)
+        self.assertIn('"proxy_sponsor_tag"', server)
+        self.assertIn("write_telemt_general", server)
+        self.assertIn('"secret", "proxy_sponsor_tag"', server)
         self.assertIn('id="clientServersForm"', html)
         self.assertIn("/api/client-servers", server)
         self.assertIn("save_client_servers", server)
@@ -505,6 +511,47 @@ class AdminFeatureTests(unittest.TestCase):
         for layout in ("observatory", "blueprint", "cassette", "metrocard", "museum", "weather", "chess", "bakery", "aquarium", "courier", "planetarium", "switchboard", "typewriter", "harbor", "laboratory", "calendar", "vinyl", "constellation", "semaphore", "snowglobe"):
             self.assertIn(f'("{layout}",', server)
         self.assertIn('"name": "Рандомный сайт"', server)
+        self.assertEqual(len(re.findall(r'^\s{6}[a-z]+:"Если ', random_site, re.M)), 30)
+        self.assertIn('id="handoff"', random_site)
+
+    def test_site_gallery_visually_exposes_all_story_presets(self):
+        html = INDEX_PATH.read_text(encoding="utf-8")
+        script = APP_JS_PATH.read_text(encoding="utf-8")
+        styles = (ROOT / "admin-web" / "static" / "styles.css").read_text(encoding="utf-8")
+        self.assertIn("30 разных тематических сайтов", html)
+        self.assertIn("30 тематических витрин", script)
+        self.assertIn("site-preset-preview", script)
+        self.assertIn('[data-layout="route-workshop"]', styles)
+        self.assertIn(".site-preset-grid", styles)
+
+    def test_telemt_general_writer_preserves_other_sections_and_removes_tag(self):
+        with tempfile.TemporaryDirectory() as raw:
+            server = load_server(Path(raw))
+            server.TELEMT_CONFIG.parent.mkdir(parents=True)
+            server.TELEMT_CONFIG.write_text(
+                '[general]\nuse_middle_proxy = false\nad_tag = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"\n\n'
+                '[access.users]\nmain = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"\n',
+                encoding="utf-8",
+            )
+            server.write_telemt_general({"ad_tag": None, "use_middle_proxy": True})
+            text = server.TELEMT_CONFIG.read_text(encoding="utf-8")
+            self.assertNotIn("ad_tag", text)
+            self.assertIn("use_middle_proxy = true", text)
+            self.assertIn('[access.users]\nmain = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"', text)
+            self.assertEqual(server.TELEMT_CONFIG.stat().st_mode & 0o777, 0o600)
+            self.assertFalse(list(server.TELEMT_CONFIG.parent.glob("config.toml.tmp")))
+
+    def test_sponsor_tag_is_not_exposed_by_public_config(self):
+        with tempfile.TemporaryDirectory() as raw:
+            server = load_server(Path(raw))
+            payload = server.public_config({
+                "brand_name": "IGProxy",
+                "proxy_sponsor_enabled": True,
+                "proxy_sponsor_tag": "abcdefabcdefabcdefabcdefabcdefab",
+            })
+            self.assertTrue(payload["proxy_sponsor_configured"])
+            self.assertNotIn("proxy_sponsor_tag", payload)
+            self.assertNotIn("proxy_sponsor_tag_suffix", payload)
 
     def test_all_public_sites_animate_and_fit_mobile_viewport(self):
         for preset in ("route-workshop", "glass-garden", "open-library"):
