@@ -59,6 +59,21 @@ installer_pick_recommended_port
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(result.stdout.strip(), "9443")
 
+    def test_custom_port_is_entered_directly_not_as_menu_option(self):
+        result = run_bash(
+            """
+installer_pick_recommended_port() { printf '8443\\n'; }
+installer_port_is_usable() { [ "$1" = 8443 ] || [ "$1" = 9443 ]; }
+installer_port_owner_label() { printf 'занят nginx'; }
+log_error() { printf '%s\\n' "$*" >&2; }
+printf '9443\\n' | installer_choose_public_port
+"""
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout.strip(), "9443")
+        self.assertIn("Введите номер порта [8443]", result.stderr)
+        self.assertIn("443 не предлагается", result.stderr)
+
     def test_all_candidate_ports_busy_is_hard_failure(self):
         result = run_bash(
             """
@@ -256,6 +271,34 @@ installer_preflight_json
         self.assertIn("-checkend 86400", website)
         self.assertIn('-checkhost "$domain"', website)
         self.assertIn("gotelegram-certbot.XXXXXX", website)
+        self.assertIn("ssl_certificate_live_dir", website)
+        self.assertIn("ssl_certificate_matching_live_dir", website)
+        self.assertIn("igproxy_certificate_lineage_name", website)
+        self.assertIn('certbot_args+=(--cert-name "$dedicated_name")', website)
+        self.assertNotIn('--cert-name "$(basename "$matching_live_dir")"', website)
+        self.assertIn('generate_nginx_config "$domain" "$proxy_port" true "$cert_live_dir"', website)
+        self.assertIn('INSTALLER_DOMAIN_CERT_REUSED=1', WIZARD.read_text(encoding="utf-8"))
+        self.assertIn('INSTALLER_TX_CERT_NAME="${INSTALLER_DOMAIN_CERT_LINEAGE:-}"', INSTALL.read_text(encoding="utf-8"))
+        self.assertIn('installer_firewall_check_ports "$public_port" || return', INSTALL.read_text(encoding="utf-8"))
+
+    def test_new_installer_uses_only_bundled_igproxy_site_presets(self):
+        install = INSTALL.read_text(encoding="utf-8")
+        templates = (ROOT / "lib" / "templates_catalog.sh").read_text(encoding="utf-8")
+        self.assertIn("interactive_igproxy_site_preset_selection", install)
+        self.assertIn("prepare_igproxy_site_preset", install)
+        self.assertNotIn("template_dir=$(interactive_template_selection)", install[install.index("install_pro_mode()"):install.index("# ── Статус")])
+        self.assertIn("random-gallery|Рандомный сайт", templates)
+        self.assertIn("story-playground|Сад воздушных троп", templates)
+        self.assertIn("Все варианты хранятся локально", templates)
+
+    def test_interactive_steps_clear_the_terminal(self):
+        ui = (ROOT / "lib" / "installer_ui.sh").read_text(encoding="utf-8")
+        wizard = WIZARD.read_text(encoding="utf-8")
+        install = INSTALL.read_text(encoding="utf-8")
+        self.assertIn("ig_ui_clear()", ui)
+        self.assertIn("printf '\\033[2J\\033[H'", ui)
+        self.assertIn("installer_preflight_collect\n    type ig_ui_clear", wizard)
+        self.assertGreaterEqual(install.count("ig_ui_clear"), 3)
 
     def test_russian_operator_text_does_not_expose_internal_mode_names(self):
         russian = (ROOT / "lib" / "lang" / "ru.sh").read_text(encoding="utf-8")

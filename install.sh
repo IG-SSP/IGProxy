@@ -756,8 +756,6 @@ menu_install() {
     export DEPLOYMENT_ROLE
 
     if type installer_preflight_run >/dev/null 2>&1; then
-        type ig_ui_stepper >/dev/null 2>&1 &&
-            ig_ui_stepper 2 "Роль" "Проверка" "Публикация" "Установка"
         installer_preflight_run || return
     fi
 
@@ -861,7 +859,13 @@ install_lite_mode() {
     # Confirm
     local ip
     ip=$(get_server_ip)
-    echo ""
+    type ig_ui_clear >/dev/null 2>&1 && ig_ui_clear
+    if type ig_ui_logo >/dev/null 2>&1; then
+        ig_ui_logo "Готово к установке"
+        ig_ui_stepper 4 "Роль" "Проверка" "Публикация" "Установка"
+    else
+        echo ""
+    fi
     echo -e "  ${BOLD}${WHITE}$(t install_config_title)${NC}"
     echo -e "  $(t install_cfg_ip)         ${CYAN}${ip}${NC}"
     echo -e "  $(t install_cfg_port)       ${CYAN}${port}${NC}"
@@ -951,7 +955,15 @@ install_pro_mode() {
     [ "$public_port" = "443" ] && warn_3xui_443_conflict || true
 
     # Домен
-    echo ""
+    type ig_ui_clear >/dev/null 2>&1 && ig_ui_clear
+    if type ig_ui_logo >/dev/null 2>&1; then
+        ig_ui_logo "Домен и HTTPS"
+        ig_ui_stepper 3 "Роль" "Проверка" "Публикация" "Установка"
+        ig_ui_heading "ДОМЕН" "Какой адрес использовать?" \
+            "Если подходящий сертификат уже существует, мастер подключит его без повторного выпуска."
+    else
+        echo ""
+    fi
     echo -ne "  ${WHITE}$(t install_enter_domain)${NC} "
     read -r user_domain
     user_domain="$(printf '%s' "$user_domain" | tr -d '[:space:]')"
@@ -964,30 +976,29 @@ install_pro_mode() {
     if type installer_domain_preflight >/dev/null 2>&1; then
         installer_domain_preflight "$user_domain" || return
     fi
-    installer_firewall_check_ports "$public_port" 80 || return
+    if [ "${INSTALLER_DOMAIN_CERT_REUSED:-0}" = "1" ]; then
+        installer_firewall_check_ports "$public_port" || return
+    else
+        installer_firewall_check_ports "$public_port" 80 || return
+    fi
 
     # Email для Let's Encrypt (ленивый: пропускаем — LE без почты)
     local ssl_email=""
-    if [ "$lazy" != "1" ]; then
+    if [ "$lazy" != "1" ] && [ "${INSTALLER_DOMAIN_CERT_REUSED:-0}" != "1" ]; then
         echo -ne "  ${WHITE}$(t install_enter_email)${NC} "
         read -r ssl_email
+    elif [ "${INSTALLER_DOMAIN_CERT_REUSED:-0}" = "1" ]; then
+        log_dim "Email не запрашивается: используется существующий сертификат."
     fi
 
-    # Выбор шаблона
-    local template_dir=""
+    # Выбор встроенной витрины IGProxy. Сторонний каталог в новом мастере не
+    # показываем: все эти страницы уже находятся внутри проверенного релиза.
+    local site_preset_id=""
     if [ "$lazy" = "1" ]; then
-        type load_catalog >/dev/null 2>&1 && load_catalog >/dev/null 2>&1 || true
-        local _rtpl; _rtpl=$(pick_random_template_id 2>/dev/null)
-        if [ -n "$_rtpl" ]; then
-            log_dim "$(tf lazy_template "$_rtpl")"
-            template_dir=$(download_template "$_rtpl" 2>/dev/null) || template_dir=""
-        fi
-        if [ -z "$template_dir" ]; then
-            template_dir=$(interactive_template_selection) || return
-        fi
+        site_preset_id="random-gallery"
+        log_dim "Выбрана встроенная витрина: Рандомный сайт."
     else
-        template_dir=$(interactive_template_selection)
-        [ $? -ne 0 ] && return
+        site_preset_id=$(interactive_igproxy_site_preset_selection) || return
     fi
 
     local nginx_internal_port
@@ -1015,9 +1026,16 @@ install_pro_mode() {
     fi
     local domain_hex; domain_hex=$(printf '%s' "$user_domain" | xxd -p | tr -d '\n')
     local faketls_secret="ee${raw_secret}${domain_hex}"
+    local proxy_link="https://t.me/proxy?server=${user_domain}&port=${public_port}&secret=${faketls_secret}"
 
     # Сводка
-    echo ""
+    type ig_ui_clear >/dev/null 2>&1 && ig_ui_clear
+    if type ig_ui_logo >/dev/null 2>&1; then
+        ig_ui_logo "Готово к установке"
+        ig_ui_stepper 4 "Роль" "Проверка" "Публикация" "Установка"
+    else
+        echo ""
+    fi
     echo -e "  ${BOLD}${WHITE}$(t install_config_title)${NC}"
     echo -e "  $(t install_cfg_domain)      ${CYAN}${user_domain}${NC}"
     echo -e "  $(t install_cfg_port)       ${CYAN}${public_port} (telemt)${NC}"
@@ -1033,6 +1051,7 @@ install_pro_mode() {
     fi
 
     INSTALLER_TX_DOMAIN="$user_domain"
+    INSTALLER_TX_CERT_NAME="${INSTALLER_DOMAIN_CERT_LINEAGE:-}"
     installer_transaction_begin "domain-site:$public_port" || return
 
     # Установка
@@ -1070,7 +1089,12 @@ key${i} = \"$(generate_hex 32)\""
         log_info "$(tf lazy_keys_created 5)"
     fi
 
-    # Сайт (nginx + certbot + шаблон)
+    # Сайт (nginx + certbot + встроенная витрина)
+    local template_dir
+    template_dir=$(prepare_igproxy_site_preset "$site_preset_id" "$proxy_link") || {
+        installer_transaction_rollback "не удалось подготовить встроенную витрину"
+        return
+    }
     setup_pro_mode "$user_domain" "$template_dir" "$nginx_internal_port" "$ssl_email" "$public_port" || {
         installer_transaction_rollback "не удалось настроить сайт или сертификат"
         return
@@ -1085,6 +1109,8 @@ key${i} = \"$(generate_hex 32)\""
         installer_transaction_rollback "не удалось сохранить настройки"
         return
     }
+    bot_update_config_field "site_preset" "$site_preset_id" >/dev/null 2>&1 || true
+    bot_update_config_field "site_key" "main" >/dev/null 2>&1 || true
     installer_verify_install "pro" "$public_port" "$user_domain" || {
         installer_transaction_rollback "финальная проверка прокси и сайта не пройдена"
         return

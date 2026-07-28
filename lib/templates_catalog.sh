@@ -614,3 +614,112 @@ pick_random_template_id() {
     [ -f "$CATALOG_FILE" ] || return 1
     jq -r '.categories[].templates[].id' "$CATALOG_FILE" 2>/dev/null | shuf -n1
 }
+
+# ── Встроенные витрины IGProxy ──────────────────────────────────────────────
+# Эти страницы разработаны вместе с IGProxy и входят в релиз. Интерактивный
+# установщик использует только их; большой внешний каталог оставлен лишь для
+# обратной совместимости со старым меню смены шаблона.
+IGPROXY_SITE_PRESETS_DIR="${IGPROXY_SITE_PRESETS_DIR:-$(dirname "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")")/site-presets}"
+
+igproxy_site_preset_rows() {
+    cat <<'EOF'
+random-gallery|Рандомный сайт|Одна из 10 самостоятельных витрин при каждом открытии|random-gallery|auto
+story-editorial|Ночная редакция|Светлая газетная обложка с крупной типографикой|random-gallery|editorial
+story-transit|Лунное депо|Контрастное транспортное табло и лунный вагон|random-gallery|transit
+story-cartography|Картографы дождя|Бумажная карта, координаты и новая линия маршрута|random-gallery|cartography
+story-terminal|Тихая мастерская|Инженерный терминал с зелёным свечением|random-gallery|terminal
+story-botanical|Оранжерея мостов|Мягкий ботанический атлас и органические формы|random-gallery|botanical
+story-postcard|Облачная почта|Воздушная открытка с конвертом и чистым небом|random-gallery|postcard
+story-tearoom|Чайная у перевала|Тёплая вывеска старой чайной и второй перевал|random-gallery|tearoom
+story-beacon|Бумажный маяк|Морская сигнальная панель и геометричный луч|random-gallery|beacon
+story-poster|Оркестр обходных нот|Яркий музыкальный постер с ритмичными формами|random-gallery|poster
+story-playground|Сад воздушных троп|Игровая иллюстрация с улиткой и мягкими карточками|random-gallery|playground
+route-workshop|Маршрутная мастерская|Трёхмерная мастерская со светящимися маршрутами|route-workshop|auto
+glass-garden|Сад за стеклом|Светлая басня о хранителях дверей|glass-garden|auto
+open-library|Библиотека открытых окон|Ночная история о совах, ставнях и книгах-лодках|open-library|auto
+EOF
+}
+
+igproxy_site_preset_definition() {
+    local wanted="$1"
+    igproxy_site_preset_rows | awk -F'|' -v wanted="$wanted" '$1 == wanted { print; found=1; exit } END { exit(found ? 0 : 1) }'
+}
+
+interactive_igproxy_site_preset_selection() {
+    local rows=() row id name description source layout choice i=1
+    while IFS= read -r row; do
+        [ -n "$row" ] && rows+=("$row")
+    done < <(igproxy_site_preset_rows)
+
+    type ig_ui_clear >/dev/null 2>&1 && ig_ui_clear
+    if type ig_ui_logo >/dev/null 2>&1; then
+        ig_ui_logo "Витрина сайта"
+        ig_ui_stepper 3 "Роль" "Проверка" "Публикация" "Установка"
+        ig_ui_heading "ВСТРОЕННЫЕ САЙТЫ" "Выберите витрину IGProxy" \
+            "Все варианты хранятся локально и не скачиваются со сторонних репозиториев."
+    else
+        echo "" >&2
+        echo "  Встроенные сайты IGProxy:" >&2
+    fi
+
+    for row in "${rows[@]}"; do
+        IFS='|' read -r id name description source layout <<< "$row"
+        printf '  %s%2d%s  %s%-28s%s %s%s%s\n' \
+            "${IG_UI_CYAN:-${CYAN:-}}" "$i" "${IG_UI_RESET:-${NC:-}}" \
+            "${IG_UI_BOLD:-${BOLD:-}}" "$name" "${IG_UI_RESET:-${NC:-}}" \
+            "${IG_UI_MUTED:-${DIM:-}}" "$description" "${IG_UI_RESET:-${NC:-}}" >&2
+        i=$((i + 1))
+    done
+
+    while true; do
+        printf '\n  %s%s%s Вариант [1]: ' \
+            "${IG_UI_CYAN:-${CYAN:-}}" "$(type ig_ui_symbol >/dev/null 2>&1 && ig_ui_symbol "❯" ">" || printf '>')" \
+            "${IG_UI_RESET:-${NC:-}}" >&2
+        if [ -n "${IG_UI_TTY:-}" ]; then
+            IFS= read -r choice < "$IG_UI_TTY" || choice=""
+        else
+            IFS= read -r choice || choice=""
+        fi
+        choice="${choice:-1}"
+        case "$choice" in 0|q|Q) return 1 ;; esac
+        if [[ "$choice" =~ ^[0-9]+$ ]] &&
+           [ "$choice" -ge 1 ] && [ "$choice" -le "${#rows[@]}" ]; then
+            IFS='|' read -r id name description source layout <<< "${rows[$((choice - 1))]}"
+            printf '%s\n' "$id"
+            return 0
+        fi
+        log_error "Введите номер от 1 до ${#rows[@]}."
+    done
+}
+
+prepare_igproxy_site_preset() {
+    local preset_id="$1" proxy_link="$2" definition source_id layout output_dir page
+    [[ "$preset_id" =~ ^[a-z0-9-]+$ ]] || return 1
+    definition=$(igproxy_site_preset_definition "$preset_id") || return 1
+    IFS='|' read -r _ _ _ source_id layout <<< "$definition"
+    [ -f "$IGPROXY_SITE_PRESETS_DIR/$source_id/index.html" ] || {
+        log_error "Встроенная витрина не найдена: $preset_id"
+        return 1
+    }
+
+    output_dir="$TEMPLATES_CACHE/igproxy-$preset_id"
+    mkdir -p -m 700 "$TEMPLATES_CACHE"
+    rm -rf -- "$output_dir"
+    mkdir -p -m 700 "$output_dir"
+    cp -a "$IGPROXY_SITE_PRESETS_DIR/$source_id/." "$output_dir/" || return 1
+
+    while IFS= read -r -d '' page; do
+        python3 - "$page" "$layout" 3<<< "$proxy_link" <<'PY' || return 1
+import pathlib
+import sys
+
+page = pathlib.Path(sys.argv[1])
+layout = sys.argv[2]
+proxy_link = open(3, encoding="utf-8").read().strip()
+source = page.read_text(encoding="utf-8")
+source = source.replace("__PROXY_LINK__", proxy_link).replace("__LAYOUT__", layout)
+page.write_text(source, encoding="utf-8")
+PY
+    done < <(find "$output_dir" -type f -name '*.html' -print0)
+    printf '%s\n' "$output_dir"
+}

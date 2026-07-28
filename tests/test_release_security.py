@@ -16,6 +16,10 @@ BUILDER = ROOT / "tools" / "build_release.py"
 
 
 class ReleaseSecurityTests(unittest.TestCase):
+    def test_default_portable_installer_name_is_stable(self):
+        source = (ROOT / "tools" / "build_portable_installer.py").read_text(encoding="utf-8")
+        self.assertIn('default=ROOT.parent / "build" / "IGProxy"', source)
+
     def test_portable_installer_is_deterministic_and_embeds_verified_release(self):
         module_path = ROOT / "tools" / "build_portable_installer.py"
         spec = importlib.util.spec_from_file_location("portable_builder", module_path)

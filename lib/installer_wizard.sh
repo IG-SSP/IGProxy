@@ -427,6 +427,11 @@ installer_preflight_show() {
 
 installer_preflight_run() {
     installer_preflight_collect
+    type ig_ui_clear >/dev/null 2>&1 && ig_ui_clear
+    if type ig_ui_logo >/dev/null 2>&1; then
+        ig_ui_logo "Проверка сервера"
+        ig_ui_stepper 2 "Роль" "Проверка" "Публикация" "Установка"
+    fi
     installer_preflight_show
     if [ "$INSTALLER_PREFLIGHT_FATAL" -gt 0 ]; then
         log_error "Сервер пока не готов к безопасной установке. Исправьте пункты с ✗ и запустите мастер снова."
@@ -467,30 +472,33 @@ installer_preflight_json() {
 }
 
 installer_choose_public_port() {
-    local recommended choice custom owner
+    local recommended choice custom owner port443_owner
     recommended="${INSTALLER_SELECTED_PORT:-}"
     [ -n "$recommended" ] || recommended=$(installer_pick_recommended_port) || {
         log_error "Не найден свободный порт для прокси."
         return 1
     }
     while true; do
-        if type ig_ui_select >/dev/null 2>&1; then
-            choice=$(ig_ui_select "Порт прокси" 1 \
-                "recommended|TCP/${recommended}|Свободен и подходит текущей конфигурации.|Рекомендуется" \
-                "custom|Другой порт|Укажите собственный TCP-порт от 1 до 65535.|Расширенный режим") || return 1
-            case "$choice" in
-                recommended)
-                    INSTALLER_SELECTED_PORT="$recommended"
-                    printf '%s\n' "$recommended"
-                    return 0
-                    ;;
-                custom)
-                    printf '\n  %s%s%s ' "$IG_UI_CYAN" "TCP-порт:" "$IG_UI_RESET" >&2
-                    IFS= read -r custom < "$IG_UI_TTY"
-                    ;;
-            esac
+        if type ig_ui_heading >/dev/null 2>&1; then
+            ig_ui_clear
+            ig_ui_logo "Сетевой порт"
+            ig_ui_stepper 3 "Роль" "Проверка" "Публикация" "Установка"
+            ig_ui_heading "ПУБЛИЧНЫЙ ПОРТ" "На каком порту принимать MTProxy?" \
+                "Нажмите Enter для рекомендованного порта или сразу напишите свой номер."
+            ig_ui_option "Enter" "TCP/${recommended}" \
+                "Порт свободен и подходит текущей конфигурации." "Рекомендуется"
+            if ! installer_port_is_usable 443; then
+                port443_owner=$(installer_port_owner_label 443)
+                ig_ui_status warn "TCP/443 не предлагается" "$port443_owner"
+            fi
+            printf '\n  %s%s%s Порт [%s]: ' \
+                "$IG_UI_CYAN" "$(ig_ui_symbol "❯" ">")" "$IG_UI_RESET" "$recommended" >&2
+            IFS= read -r custom < "$IG_UI_TTY" || custom=""
+            custom="${custom:-$recommended}"
+            case "$custom" in 0|q|Q) return 1 ;; esac
             if ! [[ "$custom" =~ ^[0-9]+$ ]] || [ "$custom" -lt 1 ] || [ "$custom" -gt 65535 ]; then
-                ig_ui_status error "Некорректный порт" "Введите число от 1 до 65535."
+                ig_ui_status error "Некорректный порт" \
+                    "Введите сам номер порта, например ${recommended} или 9443."
                 continue
             fi
             if ! installer_port_is_usable "$custom"; then
@@ -504,36 +512,26 @@ installer_choose_public_port() {
         fi
         echo "" >&2
         echo -e "  ${BOLD:-}Публичный порт прокси${NC:-}" >&2
-        echo -e "  ${GREEN:-}1)${NC:-} ${recommended} — рекомендуется" >&2
-        echo -e "  ${CYAN:-}2)${NC:-} Указать другой порт" >&2
+        echo -e "  ${GREEN:-}${recommended}${NC:-} — рекомендуется" >&2
+        [ "$recommended" != "443" ] &&
+            echo -e "  ${YELLOW:-}443 не предлагается:${NC:-} $(installer_port_owner_label 443)" >&2
         echo -e "  ${DIM:-}0) Отмена${NC:-}" >&2
-        echo -ne "  Выбор [1]: " >&2
+        echo -ne "  Введите номер порта [${recommended}]: " >&2
         read -r choice
-        case "${choice:-1}" in
-            1)
-                INSTALLER_SELECTED_PORT="$recommended"
-                printf '%s\n' "$recommended"
-                return 0
-                ;;
-            2)
-                echo -ne "  Порт (1–65535): " >&2
-                read -r custom
-                if ! [[ "$custom" =~ ^[0-9]+$ ]] || [ "$custom" -lt 1 ] || [ "$custom" -gt 65535 ]; then
-                    log_error "Некорректный номер порта."
-                    continue
-                fi
-                if ! installer_port_is_usable "$custom"; then
-                    owner=$(installer_port_owner_label "$custom")
-                    log_error "Порт $custom уже занят: $owner"
-                    continue
-                fi
-                INSTALLER_SELECTED_PORT="$custom"
-                printf '%s\n' "$custom"
-                return 0
-                ;;
-            0) return 1 ;;
-            *) log_warning "Выберите 1, 2 или 0." ;;
-        esac
+        custom="${choice:-$recommended}"
+        case "$custom" in 0|q|Q) return 1 ;; esac
+        if ! [[ "$custom" =~ ^[0-9]+$ ]] || [ "$custom" -lt 1 ] || [ "$custom" -gt 65535 ]; then
+            log_error "Введите номер TCP-порта от 1 до 65535."
+            continue
+        fi
+        if ! installer_port_is_usable "$custom"; then
+            owner=$(installer_port_owner_label "$custom")
+            log_error "Порт $custom уже занят: $owner"
+            continue
+        fi
+        INSTALLER_SELECTED_PORT="$custom"
+        printf '%s\n' "$custom"
+        return 0
     done
 }
 
@@ -551,6 +549,7 @@ installer_local_global_ipv6() {
 
 installer_domain_preflight() {
     local domain="$1" server_ip records aaaa local_v6 owner80 caa public_records resolver record public_verified=0
+    INSTALLER_DOMAIN_CERT_REUSED=0
     validate_domain "$domain" || {
         log_error "Некорректный домен: $domain"
         return 1
@@ -615,6 +614,19 @@ installer_domain_preflight() {
     fi
     [ -n "$caa" ] && log_success "CAA допускает Let's Encrypt." || log_dim "CAA-записей нет — выпуск Let's Encrypt не ограничен."
 
+    INSTALLER_DOMAIN_CERT_LINEAGE=""
+    if type igproxy_certificate_lineage_name >/dev/null 2>&1; then
+        INSTALLER_DOMAIN_CERT_LINEAGE=$(igproxy_certificate_lineage_name "$domain" 2>/dev/null || true)
+    fi
+    if type ssl_certificate_live_dir >/dev/null 2>&1 &&
+       INSTALLER_DOMAIN_CERT_DIR=$(ssl_certificate_live_dir "$domain" 2>/dev/null); then
+        INSTALLER_DOMAIN_CERT_REUSED=1
+        log_success "Найден готовый сертификат: $INSTALLER_DOMAIN_CERT_DIR"
+        log_dim "Повторный выпуск не потребуется; мастер подключит существующую линию Let's Encrypt."
+    else
+        INSTALLER_DOMAIN_CERT_DIR=""
+    fi
+
     owner80=$(installer_port_listener 80)
     if [ -n "$owner80" ] && ! printf '%s' "$owner80" | grep -Eiq 'nginx'; then
         log_error "TCP/80 занят не nginx: $(installer_trim_line "$owner80"). Webroot-проверка Let's Encrypt небезопасна."
@@ -622,6 +634,8 @@ installer_domain_preflight() {
     fi
     if [ -n "$owner80" ]; then
         log_success "Порт 80 уже обслуживает nginx; мастер добавит отдельный server_name."
+    elif [ "$INSTALLER_DOMAIN_CERT_REUSED" = "1" ]; then
+        log_dim "Порт 80 свободен; готовый сертификат будет использован без ACME-проверки."
     else
         log_success "Порт 80 свободен для проверки Let's Encrypt."
     fi
@@ -630,6 +644,9 @@ installer_domain_preflight() {
 
 installer_choose_mode() {
     if type ig_ui_select >/dev/null 2>&1; then
+        ig_ui_clear
+        ig_ui_logo "Публикация"
+        ig_ui_stepper 3 "Роль" "Проверка" "Публикация" "Установка"
         ig_ui_heading "ШАГ 3 · ПУБЛИКАЦИЯ" "Как публиковать прокси?" \
             "Сайт нужен только для HTTPS-маскировки и запасной кнопки подключения."
         if [ "${DEPLOYMENT_ROLE:-standalone}" = "hub" ]; then
@@ -678,6 +695,7 @@ installer_role_title() {
 
 installer_choose_deployment_role() {
     if type ig_ui_select >/dev/null 2>&1; then
+        ig_ui_clear
         ig_ui_logo "Мастер новой инфраструктуры"
         ig_ui_stepper 1 "Роль" "Проверка" "Публикация" "Установка"
         ig_ui_heading "ШАГ 1 · РОЛЬ СЕРВЕРА" "Что будет делать этот VPS?" \
@@ -730,6 +748,7 @@ installer_show_apply_plan() {
 
 INSTALLER_TX_DIR="${INSTALLER_TX_DIR:-}"
 INSTALLER_TX_DOMAIN="${INSTALLER_TX_DOMAIN:-}"
+INSTALLER_TX_CERT_NAME="${INSTALLER_TX_CERT_NAME:-}"
 
 installer_lock_acquire() {
     command -v flock >/dev/null 2>&1 || {
@@ -807,6 +826,15 @@ installer_transaction_begin() {
         installer_tx_copy_if_exists "/etc/letsencrypt/archive/$INSTALLER_TX_DOMAIN"
         installer_tx_copy_if_exists "/etc/letsencrypt/renewal/$INSTALLER_TX_DOMAIN.conf"
     fi
+    if [ -n "$INSTALLER_TX_CERT_NAME" ] && [ "$INSTALLER_TX_CERT_NAME" != "$INSTALLER_TX_DOMAIN" ]; then
+        [[ "$INSTALLER_TX_CERT_NAME" =~ ^[A-Za-z0-9._-]+$ ]] || {
+            log_error "Некорректное имя линии сертификата для rollback-снимка."
+            return 1
+        }
+        installer_tx_copy_if_exists "/etc/letsencrypt/live/$INSTALLER_TX_CERT_NAME"
+        installer_tx_copy_if_exists "/etc/letsencrypt/archive/$INSTALLER_TX_CERT_NAME"
+        installer_tx_copy_if_exists "/etc/letsencrypt/renewal/$INSTALLER_TX_CERT_NAME.conf"
+    fi
 
     installer_tx_service_state telemt
     installer_tx_service_state nginx
@@ -852,8 +880,20 @@ installer_transaction_restore_files() {
                         "/etc/letsencrypt/archive/$INSTALLER_TX_DOMAIN"|\
                         "/etc/letsencrypt/renewal/$INSTALLER_TX_DOMAIN.conf") ;;
                         *)
-                            log_error "Небезопасный путь в rollback-манифесте: $path"
-                            return 1
+                            if [ -n "$INSTALLER_TX_CERT_NAME" ]; then
+                                case "$path" in
+                                    "/etc/letsencrypt/live/$INSTALLER_TX_CERT_NAME"|\
+                                    "/etc/letsencrypt/archive/$INSTALLER_TX_CERT_NAME"|\
+                                    "/etc/letsencrypt/renewal/$INSTALLER_TX_CERT_NAME.conf") ;;
+                                    *)
+                                        log_error "Небезопасный путь в rollback-манифесте: $path"
+                                        return 1
+                                        ;;
+                                esac
+                            else
+                                log_error "Небезопасный путь в rollback-манифесте: $path"
+                                return 1
+                            fi
                             ;;
                     esac
                 else
@@ -930,6 +970,7 @@ installer_transaction_rollback() {
     exec 8>&- 2>/dev/null || true
     INSTALLER_TX_DIR=""
     INSTALLER_TX_DOMAIN=""
+    INSTALLER_TX_CERT_NAME=""
     [ "$restore_ok" -eq 1 ]
 }
 
@@ -943,6 +984,7 @@ installer_transaction_commit() {
     exec 8>&- 2>/dev/null || true
     INSTALLER_TX_DIR=""
     INSTALLER_TX_DOMAIN=""
+    INSTALLER_TX_CERT_NAME=""
 }
 
 installer_verify_install() {

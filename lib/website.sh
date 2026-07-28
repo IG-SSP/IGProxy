@@ -43,6 +43,27 @@ generate_nginx_config() {
     local domain="$1"
     local proxy_port="${2:-443}"
     local use_ssl="${3:-true}"
+    local cert_live_dir="${4:-/etc/letsencrypt/live/$domain}"
+    local cert_name="${cert_live_dir##*/}"
+    validate_domain "$domain" || {
+        log_error "Некорректный домен для nginx: $domain"
+        return 1
+    }
+    case "$cert_live_dir" in
+        /etc/letsencrypt/live/*) ;;
+        *)
+            log_error "Небезопасный путь к сертификату: $cert_live_dir"
+            return 1
+            ;;
+    esac
+    [[ "$cert_name" =~ ^[A-Za-z0-9._-]+$ ]] || {
+        log_error "Некорректное имя линии сертификата: $cert_name"
+        return 1
+    }
+    [ -s "$cert_live_dir/fullchain.pem" ] && [ -s "$cert_live_dir/privkey.pem" ] || {
+        log_error "В выбранной линии Let's Encrypt нет полного сертификата и ключа."
+        return 1
+    }
 
     mkdir -p "$(dirname "$NGINX_SITE_CONF")"
 
@@ -73,8 +94,8 @@ server {
     server_name DOMAIN_PLACEHOLDER;
 
     # SSL сертификаты
-    ssl_certificate /etc/letsencrypt/live/DOMAIN_PLACEHOLDER/fullchain.pem;
-    ssl_certificate_key /etc/letsencrypt/live/DOMAIN_PLACEHOLDER/privkey.pem;
+    ssl_certificate CERT_DIR_PLACEHOLDER/fullchain.pem;
+    ssl_certificate_key CERT_DIR_PLACEHOLDER/privkey.pem;
 
     # Современные TLS настройки
     ssl_protocols TLSv1.2 TLSv1.3;
@@ -158,11 +179,11 @@ EOHUBLIMITS
     ' "$NGINX_SITE_CONF" > "${NGINX_SITE_CONF}.tmp" &&
         mv "${NGINX_SITE_CONF}.tmp" "$NGINX_SITE_CONF"
 
-    # Подставляем значения (используем | как разделитель, чтобы / в домене не ломал sed)
-    local escaped_domain
-    escaped_domain=$(printf '%s\n' "$domain" | sed 's/[&/\]/\\&/g')
-    sed -i "s|DOMAIN_PLACEHOLDER|${escaped_domain}|g" "$NGINX_SITE_CONF"
+    # Домен уже прошёл validate_domain, а имя линии сертификата ограничено
+    # безопасным набором символов; разделитель | в значениях невозможен.
+    sed -i "s|DOMAIN_PLACEHOLDER|${domain}|g" "$NGINX_SITE_CONF"
     sed -i "s|SSL_PORT_PLACEHOLDER|${proxy_port}|g" "$NGINX_SITE_CONF"
+    sed -i "s|CERT_DIR_PLACEHOLDER|${cert_live_dir}|g" "$NGINX_SITE_CONF"
 
     # Активируем отдельный virtual host, не трогая уже существующие сайты.
     activate_nginx_site
@@ -201,18 +222,50 @@ EONGINX_TEMP
 }
 
 # ── Получение SSL сертификата ────────────────────────────────────────────────
+_ssl_certificate_live_dir() {
+    local domain="$1" require_fresh="${2:-1}" exact candidate cert
+    validate_domain "$domain" || return 1
+    exact="/etc/letsencrypt/live/$domain"
+    for candidate in "$exact" /etc/letsencrypt/live/*; do
+        [ -d "$candidate" ] || continue
+        cert="$candidate/fullchain.pem"
+        [ -s "$cert" ] && [ -s "$candidate/privkey.pem" ] || continue
+        openssl x509 -in "$cert" -noout -checkhost "$domain" >/dev/null 2>&1 || continue
+        if [ "$require_fresh" = "1" ]; then
+            openssl x509 -in "$cert" -noout -checkend 86400 >/dev/null 2>&1 || continue
+        fi
+        printf '%s\n' "$candidate"
+        return 0
+    done
+    return 1
+}
+
+ssl_certificate_live_dir() {
+    _ssl_certificate_live_dir "$1" 1
+}
+
+ssl_certificate_matching_live_dir() {
+    _ssl_certificate_live_dir "$1" 0
+}
+
 ssl_certificate_is_usable() {
-    local domain="$1" cert="/etc/letsencrypt/live/$1/fullchain.pem"
-    [ -s "$cert" ] || return 1
-    openssl x509 -in "$cert" -noout -checkend 86400 >/dev/null 2>&1 || return 1
-    openssl x509 -in "$cert" -noout -checkhost "$domain" >/dev/null 2>&1
+    ssl_certificate_live_dir "$1" >/dev/null
+}
+
+igproxy_certificate_lineage_name() {
+    local domain="$1" digest
+    validate_domain "$domain" || return 1
+    digest=$(printf '%s' "$domain" | sha256sum | awk '{print substr($1,1,16)}')
+    [[ "$digest" =~ ^[a-f0-9]{16}$ ]] || return 1
+    printf 'igproxy-%s\n' "$digest"
 }
 
 obtain_ssl_certificate() {
     local domain="$1"
     local email="${2:-}"
+    local cert_live_dir="" dedicated_name="" dedicated_dir=""
 
-    if ! ssl_certificate_is_usable "$domain"; then
+    if ! cert_live_dir=$(ssl_certificate_live_dir "$domain"); then
         log_info "Получение SSL сертификата для $domain..."
 
         # Временный конфиг для ACME challenge
@@ -240,15 +293,28 @@ obtain_ssl_certificate() {
         else
             certbot_args+=(--register-unsafely-without-email)
         fi
-        [ -d "/etc/letsencrypt/live/$domain" ] && certbot_args+=(--force-renewal)
+        dedicated_name=$(igproxy_certificate_lineage_name "$domain") || return 1
+        dedicated_dir="/etc/letsencrypt/live/$dedicated_name"
+        certbot_args+=(--cert-name "$dedicated_name")
+        if [ -d "$dedicated_dir" ]; then
+            certbot_args+=(--force-renewal)
+            log_dim "Обновляю отдельную линию IGProxy: $dedicated_name"
+        else
+            log_dim "Выпускаю отдельную линию IGProxy: $dedicated_name"
+        fi
 
         local certbot_log
         certbot_log=$(mktemp /tmp/gotelegram-certbot.XXXXXX) || return 1
         chmod 600 "$certbot_log"
         if certbot "${certbot_args[@]}" >"$certbot_log" 2>&1; then
             rm -f -- "$certbot_log"
-            log_success "SSL сертификат получен для $domain"
-            return 0
+            cert_live_dir=$(ssl_certificate_live_dir "$domain" 2>/dev/null || true)
+            if [ -n "$cert_live_dir" ]; then
+                log_success "SSL сертификат готов: $cert_live_dir"
+                return 0
+            fi
+            log_error "Certbot завершился успешно, но подходящий сертификат для $domain не найден."
+            return 1
         else
             log_error "Не удалось получить SSL сертификат"
             tail -n 8 "$certbot_log" | sed 's/^/    /' >&2
@@ -258,7 +324,7 @@ obtain_ssl_certificate() {
             return 1
         fi
     else
-        log_dim "SSL сертификат уже существует для $domain"
+        log_success "Использую готовый сертификат: $cert_live_dir"
         return 0
     fi
 }
@@ -315,8 +381,10 @@ renew_ssl_certificate() {
 # ── Дата истечения SSL ───────────────────────────────────────────────────────
 get_ssl_expiry() {
     local domain="$1"
-    local cert="/etc/letsencrypt/live/$domain/fullchain.pem"
-    if [ -f "$cert" ]; then
+    local cert_live_dir cert=""
+    cert_live_dir=$(ssl_certificate_matching_live_dir "$domain" 2>/dev/null || true)
+    [ -n "$cert_live_dir" ] && cert="$cert_live_dir/fullchain.pem"
+    if [ -n "$cert" ] && [ -f "$cert" ]; then
         openssl x509 -enddate -noout -in "$cert" 2>/dev/null | sed 's/notAfter=//'
     else
         echo "N/A"
@@ -398,6 +466,7 @@ setup_pro_mode() {
     local proxy_port="${3:-443}"
     local email="${4:-}"
     local public_port="${5:-443}"
+    local cert_live_dir=""
 
     log_step "Настройка своего домена и сайта"
 
@@ -412,9 +481,13 @@ setup_pro_mode() {
 
     # 4. Получаем SSL
     obtain_ssl_certificate "$domain" "$email" || return 1
+    cert_live_dir=$(ssl_certificate_live_dir "$domain") || {
+        log_error "После проверки не найден пригодный сертификат для $domain."
+        return 1
+    }
 
     # 5. Генерируем полный nginx конфиг с SSL
-    generate_nginx_config "$domain" "$proxy_port"
+    generate_nginx_config "$domain" "$proxy_port" true "$cert_live_dir" || return 1
 
     # 6. Тестируем и перезапускаем nginx
     if nginx -t 2>/dev/null; then

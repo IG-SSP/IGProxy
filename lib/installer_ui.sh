@@ -63,6 +63,16 @@ ig_ui_symbol() {
     fi
 }
 
+ig_ui_clear() {
+    # Не засоряем логи управляющими последовательностями в non-interactive
+    # запусках, но в обычном терминале каждый этап получает чистый экран.
+    if { [ -t 1 ] || [ -t 2 ]; } && [ "${TERM:-dumb}" != "dumb" ]; then
+        printf '\033[2J\033[H' >&2
+    else
+        printf '\n' >&2
+    fi
+}
+
 ig_ui_rule() {
     local width="${1:-62}" ch line="" i
     ch=$(ig_ui_symbol "─" "-")

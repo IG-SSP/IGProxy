@@ -89,7 +89,7 @@ def main() -> None:
     parser.add_argument(
         "--output",
         type=Path,
-        default=ROOT.parent / "build" / "gotelegram-installer.run",
+        default=ROOT.parent / "build" / "IGProxy",
     )
     args = parser.parse_args()
     print(build(args.output))
