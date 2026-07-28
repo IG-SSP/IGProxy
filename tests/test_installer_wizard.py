@@ -414,6 +414,11 @@ printf '0\\n' | installer_preflight_run interactive
         self.assertIn("gotelegram-proxy", stats)
         self.assertIn("gotelegram-site", stats)
 
+    def test_existing_admin_is_updated_for_non_hub_roles(self):
+        source = INSTALL.read_text(encoding="utf-8")
+        self.assertIn('elif [ "$(admin_web_service_status)" != "not_installed" ]; then', source)
+        self.assertIn("auto_install_admin_web_if_possible", source)
+
     def test_selinux_port_change_is_transactional(self):
         wizard = WIZARD.read_text(encoding="utf-8")
         install = INSTALL.read_text(encoding="utf-8")

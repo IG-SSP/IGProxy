@@ -849,6 +849,8 @@ menu_install() {
                 bot_install || log_warning "Бот не установлен; повторите настройку из главного меню."
             fi
         fi
+    elif [ "$(admin_web_service_status)" != "not_installed" ]; then
+        auto_install_admin_web_if_possible
     fi
     type ig_ui_success >/dev/null 2>&1 &&
         ig_ui_success "IGProxy готов" "$(installer_role_title "$DEPLOYMENT_ROLE")"
