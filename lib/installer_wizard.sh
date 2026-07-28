@@ -26,7 +26,7 @@ installer_port_listener_protocol() {
     if [ -z "$line" ] && command -v netstat >/dev/null 2>&1; then
         line=$(netstat "$netstat_flags" 2>/dev/null | awk -v p=":${port}" '$4 ~ p"$" {print}')
     fi
-    printf '%s\n' "$line" | sed '/^[[:space:]]*$/d' | tr '\n' ';' | sed -E 's/;+$//; s/[[:space:]]+/ /g' | cut -c1-480
+    printf '%s\n' "$line" | sed '/^[[:space:]]*$/d'
 }
 
 installer_port_listener() {
@@ -84,7 +84,7 @@ installer_existing_public_port() {
 installer_listener_is_ours() {
     local port="$1" listener="${2:-}"
     [ -n "$listener" ] || return 1
-    installer_listener_all_match "$listener" 'telemt' || return 1
+    installer_listener_all_match "$listener" '(^|[/("])telemt([",[:space:]]|$)' || return 1
     local existing
     existing=$(installer_existing_public_port)
     [ -n "$existing" ] && [ "$existing" = "$port" ]
@@ -347,9 +347,9 @@ installer_preflight_collect() {
     INSTALLER_PF_IP=$(get_server_ip 2>/dev/null || printf '0.0.0.0')
     INSTALLER_PF_PORT80=$(installer_port_owner_label 80)
     INSTALLER_PF_PORT443=$(installer_port_owner_label 443)
-    INSTALLER_PF_UDP443=$(installer_udp_port_listener 443)
+    INSTALLER_PF_UDP443=$(installer_trim_line "$(installer_udp_port_listener 443)")
     INSTALLER_PF_TCP8443=$(installer_port_owner_label 8443)
-    INSTALLER_PF_UDP8443=$(installer_udp_port_listener 8443)
+    INSTALLER_PF_UDP8443=$(installer_trim_line "$(installer_udp_port_listener 8443)")
     INSTALLER_PF_NETWORK_SERVICES=$(installer_detect_network_services)
     INSTALLER_PF_RECOMMENDED_PORT=$(installer_pick_recommended_port 2>/dev/null || true)
     INSTALLER_PF_FIREWALL=$(installer_firewall_label)
@@ -624,7 +624,9 @@ installer_domain_http_preflight() {
     local cert_reused="${1:-0}" owner80
     INSTALLER_DOMAIN_HTTP_LISTENER=1
     owner80=$(installer_port_listener 80)
-    if [ -n "$owner80" ] && ! installer_listener_all_match "$owner80" 'nginx'; then
+    if [ -n "$owner80" ] &&
+       { ! installer_listener_all_match "$owner80" '(^|[/("])nginx([",[:space:]]|$)' ||
+         ! systemctl is-active --quiet nginx 2>/dev/null; }; then
         if [ "$cert_reused" = "1" ]; then
             INSTALLER_DOMAIN_HTTP_LISTENER=0
             log_warning "TCP/80 занят другой службой: $(installer_trim_line "$owner80")."

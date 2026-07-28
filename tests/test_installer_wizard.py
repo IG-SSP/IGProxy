@@ -124,7 +124,8 @@ installer_port_is_usable 8443
         result = run_bash(
             """
 installer_existing_public_port() { printf '443\\n'; }
-listener='LISTEN 0 4096 0.0.0.0:443 users:(("telemt",pid=7));LISTEN 0 4096 [::]:443 users:(("xray",pid=8))'
+padding=$(printf '%0600d' 0)
+listener="LISTEN 0 4096 0.0.0.0:443 users:((\\"telemt\\",pid=7)) $padding;LISTEN 0 4096 [::]:443 users:((\\"xray\\",pid=8))"
 installer_listener_is_ours 443 "$listener"
 """
         )
