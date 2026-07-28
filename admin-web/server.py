@@ -53,7 +53,12 @@ INSTALL_DIR = Path(os.getenv("GOTELEGRAM_DIR", "/opt/gotelegram"))
 BOT_DIR = Path(os.getenv("GOTELEGRAM_BOT_DIR", "/opt/gotelegram-bot"))
 DISABLED_USERS_FILE = Path(os.getenv("GOTELEGRAM_DISABLED_USERS", "/opt/gotelegram/disabled_users.json"))
 USER_LOCK_FILE = Path(os.getenv("GOTELEGRAM_USER_LOCK", "/run/gotelegram/admin-users.lock"))
-CONFIG_LOCK_FILE = Path(os.getenv("GOTELEGRAM_CONFIG_LOCK", "/run/gotelegram/config.lock"))
+CONFIG_LOCK_FILE = Path(os.getenv(
+    "GOTELEGRAM_CONFIG_LOCK",
+    str(GOTELEGRAM_CONFIG.parent / ".config.lock")
+    if os.getenv("GOTELEGRAM_CONFIG")
+    else "/run/gotelegram/config.lock",
+))
 SHARED_443_CONFIG = Path(os.getenv("GOTELEGRAM_SHARED_443", "/opt/gotelegram/shared-443.json"))
 BACKUP_SCHEDULE_FILE = Path(os.getenv("GOTELEGRAM_BACKUP_SCHEDULE", "/opt/gotelegram/backup_schedule.json"))
 BACKUP_RESTORE_LOG = Path(os.getenv("GOTELEGRAM_BACKUP_RESTORE_LOG", "/var/log/gotelegram-restore.log"))
