@@ -433,14 +433,15 @@ class AdminFeatureTests(unittest.TestCase):
         self.assertIn("/api/client-servers", server)
         self.assertIn("save_client_servers", server)
         self.assertIn("renderClientServers", script)
-        self.assertIn("add_mini_app_bridge", server)
+        self.assertIn("remove_legacy_webapp_bridge", server)
+        self.assertNotIn("add_mini_app_bridge", server)
 
     def test_client_server_settings_validate_https_and_preserve_custom_labels(self):
         with tempfile.TemporaryDirectory() as raw:
             server = load_server(Path(raw))
             saved = server.save_client_servers([
-                {"label": "Амстердам · быстрый", "url": "https://ams.example.com", "enabled": True},
-                {"label": "Резерв", "url": "https://backup.example.com/path", "enabled": False},
+                {"label": "Амстердам · быстрый", "url": "https://t.me/proxy?server=ams.example.com&port=443&secret=aaaa", "enabled": True},
+                {"label": "Резерв", "url": "https://telegram.me/proxy?server=backup.example.com&port=9443&secret=bbbb", "enabled": False},
             ])
             self.assertEqual(saved[0]["label"], "Амстердам · быстрый")
             self.assertTrue(saved[0]["id"])
@@ -448,6 +449,10 @@ class AdminFeatureTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 server.save_client_servers([
                     {"label": "Локальный", "url": "http://127.0.0.1:8080", "enabled": True},
+                ])
+            with self.assertRaises(ValueError):
+                server.save_client_servers([
+                    {"label": "Не прокси", "url": "https://example.com/", "enabled": True},
                 ])
 
     def test_dashboard_uses_full_width_and_operational_status_cards(self):
@@ -484,21 +489,21 @@ class AdminFeatureTests(unittest.TestCase):
         self.assertIn("apply_custom_site", server)
         self.assertIn("/api/site/custom", server)
         self.assertIn('id="customSiteForm"', html)
-        self.assertEqual(
-            len(re.findall(r'^\s+\["(?:editorial|transit|cartography|terminal|botanical|postcard|tearoom|beacon|poster|playground)"', random_site, re.M)),
-            10,
-        )
+        self.assertEqual(len(re.findall(r'^\s+\["[a-z]+"', random_site, re.M)), 30)
         self.assertIn("Скопировать ссылку", random_site)
         self.assertIn("__PROXY_LINK__", random_site)
+        self.assertIn("__PROXY_TG_LINK__", random_site)
         self.assertIn("__LAYOUT__", random_site)
         self.assertNotIn('class="tag tag-a"', random_site)
         self.assertNotIn('class="tag tag-b"', random_site)
         self.assertIn("height:100svh", random_site)
         self.assertIn("overflow:hidden", random_site)
         self.assertIn("@media(prefers-reduced-motion:reduce)", random_site)
-        self.assertEqual(len(re.findall(r"/\* \d{2} —", random_site)), 10)
+        self.assertEqual(len(re.findall(r"/\* \d{2} —", random_site)), 30)
         for layout in ("editorial", "transit", "cartography", "terminal", "botanical", "postcard", "tearoom", "beacon", "poster", "playground"):
             self.assertIn(f'"layout": "{layout}"', server)
+        for layout in ("observatory", "blueprint", "cassette", "metrocard", "museum", "weather", "chess", "bakery", "aquarium", "courier", "planetarium", "switchboard", "typewriter", "harbor", "laboratory", "calendar", "vinyl", "constellation", "semaphore", "snowglobe"):
+            self.assertIn(f'("{layout}",', server)
         self.assertIn('"name": "Рандомный сайт"', server)
 
     def test_all_public_sites_animate_and_fit_mobile_viewport(self):
@@ -563,6 +568,7 @@ class AdminFeatureTests(unittest.TestCase):
             index = (server.WEBSITE_ROOT / "index.html").read_text(encoding="utf-8")
             self.assertIn("tg://proxy?test=1", index)
             self.assertNotIn("__PROXY_LINK__", index)
+            self.assertNotIn("__PROXY_TG_LINK__", index)
             self.assertEqual(payload["preset"], "glass-garden")
             self.assertTrue(server.WEBSITE_ROOT.stat().st_mode & 0o005)
 
@@ -583,6 +589,7 @@ class AdminFeatureTests(unittest.TestCase):
             self.assertIn('const requested="transit"', index)
             self.assertNotIn("__LAYOUT__", index)
             self.assertIn("https://t.me/proxy?test=1", index)
+            self.assertIn("tg://proxy?test=1", index)
             self.assertEqual(payload["preset"], "story-transit")
 
     def test_get_config_value_secret_accepts_quoted_main_user(self):

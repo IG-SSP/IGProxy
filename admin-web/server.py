@@ -53,6 +53,12 @@ INSTALL_DIR = Path(os.getenv("GOTELEGRAM_DIR", "/opt/gotelegram"))
 BOT_DIR = Path(os.getenv("GOTELEGRAM_BOT_DIR", "/opt/gotelegram-bot"))
 DISABLED_USERS_FILE = Path(os.getenv("GOTELEGRAM_DISABLED_USERS", "/opt/gotelegram/disabled_users.json"))
 USER_LOCK_FILE = Path(os.getenv("GOTELEGRAM_USER_LOCK", "/run/gotelegram/admin-users.lock"))
+CONFIG_LOCK_FILE = Path(os.getenv(
+    "GOTELEGRAM_CONFIG_LOCK",
+    str(GOTELEGRAM_CONFIG.parent / ".config.lock")
+    if os.getenv("GOTELEGRAM_CONFIG")
+    else "/run/gotelegram/config.lock",
+))
 SHARED_443_CONFIG = Path(os.getenv("GOTELEGRAM_SHARED_443", "/opt/gotelegram/shared-443.json"))
 BACKUP_SCHEDULE_FILE = Path(os.getenv("GOTELEGRAM_BACKUP_SCHEDULE", "/opt/gotelegram/backup_schedule.json"))
 BACKUP_RESTORE_LOG = Path(os.getenv("GOTELEGRAM_BACKUP_RESTORE_LOG", "/var/log/gotelegram-restore.log"))
@@ -60,7 +66,7 @@ WEBSITE_ROOT = Path(os.getenv("GOTELEGRAM_WEBSITE_ROOT", "/var/www/gotelegram-si
 SITE_PRESETS_DIR = Path(os.getenv("GOTELEGRAM_SITE_PRESETS", "/opt/gotelegram/current/site-presets"))
 HOST = os.getenv("GOTELEGRAM_ADMIN_HOST", "127.0.0.1")
 PORT = int(os.getenv("GOTELEGRAM_ADMIN_PORT", "1984"))
-VERSION = "2.12.1"  # fallback only; live value read from config.json
+VERSION = "2.14.0"  # fallback only; live value read from config.json
 RUNTIME_COMMON_PATHS = (
     INSTALL_DIR / "current" / "lib" / "common.sh",
     Path(__file__).resolve().parents[1] / "lib" / "common.sh",
@@ -253,6 +259,19 @@ def _validate_public_url(value: str, *, telegram_only: bool = False) -> str:
     return value
 
 
+def _validate_proxy_url(value: str) -> str:
+    value = _validate_public_url(value)
+    parsed = urllib.parse.urlparse(value)
+    query = urllib.parse.parse_qs(parsed.query)
+    if (
+        parsed.hostname.lower() not in {"t.me", "telegram.me", "telegram.dog"}
+        or parsed.path.rstrip("/") != "/proxy"
+        or not all(query.get(key, [""])[0] for key in ("server", "port", "secret"))
+    ):
+        raise ValueError("нужна прямая ссылка вида https://t.me/proxy?server=...")
+    return value
+
+
 def client_servers_payload(config: dict[str, Any] | None = None) -> list[dict[str, Any]]:
     config = config or load_json(GOTELEGRAM_CONFIG, {}) or {}
     raw = config.get("client_servers")
@@ -265,13 +284,20 @@ def client_servers_payload(config: dict[str, Any] | None = None) -> list[dict[st
         label = str(item.get("label") or "").strip()[:48]
         url = str(item.get("url") or "").strip()
         item_id = re.sub(r"[^a-z0-9_-]", "", str(item.get("id") or "").lower())[:24]
-        if label and url:
-            result.append({
+        try:
+            url = _validate_proxy_url(url)
+        except ValueError:
+            continue
+        if label:
+            server = {
                 "id": item_id or hashlib.sha256(f"{label}\0{url}".encode()).hexdigest()[:8],
                 "label": label,
                 "url": url,
                 "enabled": bool(item.get("enabled", True)),
-            })
+            }
+            if bool(item.get("managed", False)):
+                server["managed"] = True
+            result.append(server)
     return result
 
 
@@ -288,7 +314,7 @@ def save_client_servers(raw: Any) -> list[dict[str, Any]]:
         label = str(item.get("label") or "").strip()
         if not label or len(label) > 48:
             raise ValueError("подпись сервера должна содержать от 1 до 48 символов")
-        url = _validate_public_url(str(item.get("url") or ""))
+        url = _validate_proxy_url(str(item.get("url") or ""))
         item_id = re.sub(r"[^a-z0-9_-]", "", str(item.get("id") or "").lower())[:24]
         while not item_id or item_id in used_ids:
             item_id = secrets.token_hex(4)
@@ -299,41 +325,42 @@ def save_client_servers(raw: Any) -> list[dict[str, Any]]:
             "url": url,
             "enabled": bool(item.get("enabled", True)),
         })
-    config = load_json(GOTELEGRAM_CONFIG, {}) or {}
-    config["client_servers"] = servers
-    config["updated_at"] = utc_now()
-    save_json(GOTELEGRAM_CONFIG, config)
+    with FileLock(CONFIG_LOCK_FILE):
+        config = load_json(GOTELEGRAM_CONFIG, {}) or {}
+        managed = [
+            item for item in (config.get("client_servers") or [])
+            if isinstance(item, dict) and bool(item.get("managed", False))
+        ]
+        servers = [item for item in servers if not bool(item.get("managed", False))] + managed
+        config["client_servers"] = servers
+        config["updated_at"] = utc_now()
+        save_json(GOTELEGRAM_CONFIG, config)
     return servers
 
 
-MINI_APP_BRIDGE = """<!-- igproxy-mini-app -->
-<script src="https://telegram.org/js/telegram-web-app.js"></script>
-<script>
-(()=>{const w=window.Telegram&&window.Telegram.WebApp,a=document.getElementById("connect");
-if(!w||!a)return;w.ready();w.expand();a.addEventListener("click",e=>{
-const u=a.href;if(/^https:\\/\\/t\\.me\\/proxy\\?/i.test(u)){e.preventDefault();w.openTelegramLink(u);}
-});})();
-</script>"""
+LEGACY_WEBAPP_BRIDGE_RE = re.compile(
+    r"\s*<!-- igproxy-mini-app -->\s*"
+    r'<script src="https://telegram\.org/js/telegram-web-app\.js"></script>\s*'
+    r"<script>.*?</script>",
+    flags=re.IGNORECASE | re.DOTALL,
+)
 
 
-def add_mini_app_bridge(source: str) -> str:
-    if "igproxy-mini-app" in source:
-        return source
-    if re.search(r"</body\s*>", source, flags=re.IGNORECASE):
-        return re.sub(
-            r"</body\s*>",
-            MINI_APP_BRIDGE + "\n</body>",
-            source,
-            count=1,
-            flags=re.IGNORECASE,
-        )
-    return source + "\n" + MINI_APP_BRIDGE
+def remove_legacy_webapp_bridge(source: str) -> str:
+    return LEGACY_WEBAPP_BRIDGE_RE.sub("", source)
+
+
+def telegram_proxy_deep_link(link: str) -> str:
+    parsed = urllib.parse.urlparse(str(link or ""))
+    if parsed.path.rstrip("/") == "/proxy" and parsed.query:
+        return f"tg://proxy?{parsed.query}"
+    return str(link or "")
 
 
 SITE_PRESETS = {
     "random-gallery": {
         "name": "Рандомный сайт",
-        "description": "При каждом открытии выбирается самостоятельная композиция со своим стилем.",
+        "description": "При каждом открытии выбирается одна из 30 самостоятельных композиций.",
         "source": "random-gallery",
         "layout": "auto",
     },
@@ -411,6 +438,35 @@ SITE_PRESETS = {
     },
 }
 
+for preset_id, name, description in (
+    ("observatory", "Ночная обсерватория", "Звёздный купол и телескоп дальних маршрутов."),
+    ("blueprint", "Бюро тихих мостов", "Синий инженерный чертёж запасного пролёта."),
+    ("cassette", "Студия магнитных дорог", "Ретро-кассета с дорогой на стороне B."),
+    ("metrocard", "Билетная касса", "Графичный билет с незаметной пересадкой."),
+    ("museum", "Музей незапертых рам", "Тёмная галерея и картина за пределами багета."),
+    ("weather", "Бюро попутного ветра", "Воздушная погодная панель из матового стекла."),
+    ("chess", "Клуб дальних ходов", "Контрастная шахматная доска с непрямым ходом."),
+    ("bakery", "Пекарня второго выхода", "Тёплая упаковочная бумага и ароматный маршрут."),
+    ("aquarium", "Аквариум тихих течений", "Глубокое окно с пузырями и свободным потоком."),
+    ("courier", "Служба обходной доставки", "Яркая транспортная этикетка для важной посылки."),
+    ("planetarium", "Малый планетарий", "Фиолетовый звёздный купол и новая орбита."),
+    ("switchboard", "Старая телефонная", "Медные гнёзда и соединение двух берегов."),
+    ("typewriter", "Бюро непрочитанных писем", "Машинописный лист с продолжением истории."),
+    ("harbor", "Гавань сигнальных флагов", "Морская панель с цветным сообщением."),
+    ("laboratory", "Лаборатория проницаемых стен", "Чистая лабораторная карточка и прозрачный опыт."),
+    ("calendar", "Календарь запасных дней", "Крупный отрывной лист с открытым завтра."),
+    ("vinyl", "Магазин круговых историй", "Яркий виниловый конверт и соседняя дорожка."),
+    ("constellation", "Атлас невидимых линий", "Ночная карта созвездий с золотым маршрутом."),
+    ("semaphore", "Сигнальная башня", "Индустриальная панель с оранжевым семафором."),
+    ("snowglobe", "Почта снежного шара", "Ледяная стеклянная сцена и светящийся путь."),
+):
+    SITE_PRESETS[f"story-{preset_id}"] = {
+        "name": name,
+        "description": description,
+        "source": "random-gallery",
+        "layout": preset_id,
+    }
+
 
 def site_settings_payload() -> dict[str, Any]:
     config = load_json(GOTELEGRAM_CONFIG, {}) or {}
@@ -457,12 +513,13 @@ def _publish_site_stage(stage: Path, preset: str, key_name: str) -> dict[str, An
     if WEBSITE_ROOT.exists():
         WEBSITE_ROOT.replace(previous)
     stage.replace(WEBSITE_ROOT)
-    config = load_json(GOTELEGRAM_CONFIG, {}) or {}
-    config["site_preset"] = preset
-    config["site_key"] = key_name
-    config["template_id"] = f"igproxy-{preset}"
-    config["updated_at"] = utc_now()
-    save_json(GOTELEGRAM_CONFIG, config)
+    with FileLock(CONFIG_LOCK_FILE):
+        config = load_json(GOTELEGRAM_CONFIG, {}) or {}
+        config["site_preset"] = preset
+        config["site_key"] = key_name
+        config["template_id"] = f"igproxy-{preset}"
+        config["updated_at"] = utc_now()
+        save_json(GOTELEGRAM_CONFIG, config)
     return site_settings_payload()
 
 
@@ -482,10 +539,11 @@ def apply_site_preset(preset: str, key_name: str) -> dict[str, Any]:
         for page in stage.rglob("*.html"):
             rendered = (
                 page.read_text(encoding="utf-8")
+                .replace("__PROXY_TG_LINK__", telegram_proxy_deep_link(link))
                 .replace("__PROXY_LINK__", link)
                 .replace("__LAYOUT__", str(definition.get("layout") or "auto"))
             )
-            page.write_text(add_mini_app_bridge(rendered), encoding="utf-8")
+            page.write_text(remove_legacy_webapp_bridge(rendered), encoding="utf-8")
         return _publish_site_stage(stage, preset, key_name)
     except Exception:
         if not WEBSITE_ROOT.exists() and previous.exists():
@@ -515,7 +573,10 @@ def apply_custom_site(html_source: str, key_name: str) -> dict[str, Any]:
     previous = WEBSITE_ROOT.parent / ".igproxy-site-previous"
     try:
         (stage / "index.html").write_text(
-            add_mini_app_bridge(source.replace("__PROXY_LINK__", link)),
+            remove_legacy_webapp_bridge(
+                source.replace("__PROXY_TG_LINK__", telegram_proxy_deep_link(link))
+                .replace("__PROXY_LINK__", link)
+            ),
             encoding="utf-8",
         )
         return _publish_site_stage(stage, "custom", key_name)
@@ -532,12 +593,13 @@ def write_language(lang: str) -> dict[str, Any]:
     lang = str(lang or "").strip().lower()
     if not LANG_RE.match(lang):
         raise ValueError("unsupported language")
-    config = load_json(GOTELEGRAM_CONFIG, {}) or {}
-    if not isinstance(config, dict):
-        config = {}
-    config["language"] = lang
-    config["updated_at"] = utc_now()
-    save_json(GOTELEGRAM_CONFIG, config)
+    with FileLock(CONFIG_LOCK_FILE):
+        config = load_json(GOTELEGRAM_CONFIG, {}) or {}
+        if not isinstance(config, dict):
+            config = {}
+        config["language"] = lang
+        config["updated_at"] = utc_now()
+        save_json(GOTELEGRAM_CONFIG, config)
     INSTALL_DIR.mkdir(parents=True, exist_ok=True)
     (INSTALL_DIR / ".language").write_text(lang + "\n", encoding="utf-8")
     bot_env = BOT_DIR / ".env"
@@ -1340,7 +1402,7 @@ def health_payload(force: bool = False) -> dict[str, Any]:
             issues.append({
                 "level": "warn",
                 "title": f"Установлен telemt {version}",
-                "detail": "Для IGProxy 2.12.1 проверена версия 3.4.25.",
+                "detail": "Для IGProxy 2.14.0 проверена версия 3.4.25.",
                 "action": "Обновите ядро с резервной копией бинарника и конфига.",
             })
         if handshake_mss and not bulk_mss:
@@ -2340,8 +2402,6 @@ class AdminHandler(BaseHTTPRequestHandler):
                 network_dc_count = int(body.get("network_dc_count") or 1)
                 if network_dc_count < 1 or network_dc_count > 999:
                     raise ValueError("network_dc_count must be between 1 and 999")
-                config = load_json(GOTELEGRAM_CONFIG, {}) or {}
-                config["network_dc_count"] = network_dc_count
                 brand_name = str(body.get("brand_name") or "IGProxy").strip()
                 if len(brand_name) > 48:
                     raise ValueError("название должно быть не длиннее 48 символов")
@@ -2355,13 +2415,16 @@ class AdminHandler(BaseHTTPRequestHandler):
                 sponsor_enabled = bool(body.get("sponsor_enabled", False))
                 if sponsor_enabled and not sponsor_url:
                     raise ValueError("для включения спонсора укажите ссылку на канал")
-                config["brand_enabled"] = bool(body.get("brand_enabled", True))
-                config["brand_name"] = brand_name or "IGProxy"
-                config["sponsor_enabled"] = sponsor_enabled
-                config["sponsor_name"] = sponsor_name or "Спонсорский канал"
-                config["sponsor_url"] = sponsor_url
-                config["updated_at"] = utc_now()
-                save_json(GOTELEGRAM_CONFIG, config)
+                with FileLock(CONFIG_LOCK_FILE):
+                    config = load_json(GOTELEGRAM_CONFIG, {}) or {}
+                    config["network_dc_count"] = network_dc_count
+                    config["brand_enabled"] = bool(body.get("brand_enabled", True))
+                    config["brand_name"] = brand_name or "IGProxy"
+                    config["sponsor_enabled"] = sponsor_enabled
+                    config["sponsor_name"] = sponsor_name or "Спонсорский канал"
+                    config["sponsor_url"] = sponsor_url
+                    config["updated_at"] = utc_now()
+                    save_json(GOTELEGRAM_CONFIG, config)
             except (TypeError, ValueError) as exc:
                 self.send_error_json(400, str(exc))
                 return
@@ -2501,12 +2564,12 @@ def main() -> None:
     else:
         try:
             source = published_index.read_text(encoding="utf-8")
-            upgraded = add_mini_app_bridge(source)
+            upgraded = remove_legacy_webapp_bridge(source)
             if upgraded != source:
                 published_index.write_text(upgraded, encoding="utf-8")
                 os.chmod(published_index, 0o644)
         except OSError as exc:
-            print(f"IGProxy Mini App bridge was not added: {exc}")
+            print(f"IGProxy legacy Web App bridge was not removed: {exc}")
     httpd = ThreadingHTTPServer((HOST, PORT), AdminHandler)
     print(f"IGProxy admin listening on http://{HOST}:{PORT}")
     httpd.serve_forever()

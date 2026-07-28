@@ -112,7 +112,10 @@ class BotFeatureTests(unittest.TestCase):
     def test_single_bot_separates_admin_and_client_access(self):
         source = BOT_PATH.read_text(encoding="utf-8")
         self.assertIn("def get_client_menu(*, admin_back: bool = False)", source)
-        self.assertIn("WebAppInfo(url=item[\"url\"])", source)
+        self.assertIn('url=item["url"]', source)
+        self.assertNotIn("WebAppInfo", source)
+        self.assertNotIn("web_app=", source)
+        self.assertIn("def is_proxy_url", source)
         self.assertIn('callback_data="menu_client_servers"', source)
         self.assertIn('context.user_data["awaiting_client_server"]', source)
         self.assertIn("client_menu_text()", source)

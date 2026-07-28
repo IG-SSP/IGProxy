@@ -21,6 +21,19 @@ fail() {
     exit 1
 }
 
+show_bootstrap_header() {
+    echo ""
+    echo -e "  ${CYAN}╭────────────────────────────────────────────────────────────╮${NC}"
+    echo -e "  ${CYAN}│${NC}  ${GREEN}◆${NC} ${CYAN}IGProxy${NC}  безопасная установка единой сети прокси         ${CYAN}│${NC}"
+    echo -e "  ${CYAN}╰────────────────────────────────────────────────────────────╯${NC}"
+    echo ""
+}
+
+bootstrap_step() {
+    local current="$1" title="$2"
+    echo -e "  ${CYAN}◆${NC} ${current}/4  ${title}"
+}
+
 cleanup() {
     local path="${WORK_DIR:-}"
     case "$path" in
@@ -38,6 +51,7 @@ for cmd in curl tar sha256sum awk; do
     command -v "$cmd" >/dev/null 2>&1 || fail "Не найдена обязательная команда: $cmd"
 done
 
+show_bootstrap_header
 WORK_DIR=$(mktemp -d /tmp/gotelegram-bootstrap.XXXXXX)
 ARCHIVE="$WORK_DIR/release.tar.gz"
 CURL_CONFIG="$WORK_DIR/curl.conf"
@@ -62,9 +76,10 @@ CURL_CONFIG="$WORK_DIR/curl.conf"
 } > "$CURL_CONFIG"
 chmod 600 "$CURL_CONFIG"
 
-echo -e "  ${CYAN}↻${NC} Загрузка релиза..."
+bootstrap_step 1 "Загружаю проверенный релиз"
 curl --config "$CURL_CONFIG" --output "$ARCHIVE" "$RELEASE_URL"
 
+bootstrap_step 2 "Проверяю SHA-256 и безопасные пути"
 actual_sha=$(sha256sum "$ARCHIVE" | awk '{print $1}')
 [ "$actual_sha" = "${RELEASE_SHA256,,}" ] || \
     fail "SHA-256 релиза не совпал. Ничего не установлено."
@@ -84,7 +99,8 @@ mkdir -m 700 "$PAYLOAD"
 tar xzf "$ARCHIVE" -C "$PAYLOAD" --no-same-owner --no-same-permissions
 
 for required in RELEASE-MANIFEST.sha256 install.sh lib/common.sh \
-    lib/installer_wizard.sh lib/backup.sh admin-web/server.py; do
+    lib/installer_wizard.sh lib/installer_ui.sh lib/cluster.sh lib/backup.sh \
+    cluster/hub_server.py cluster/node_agent.py admin-web/server.py; do
     [ -f "$PAYLOAD/$required" ] || fail "В релизе отсутствует $required"
 done
 
@@ -100,6 +116,7 @@ for script in "$PAYLOAD"/lib/*.sh; do
     bash -n "$script"
 done
 
+bootstrap_step 3 "Активирую релиз атомарно"
 release_id="${actual_sha:0:16}"
 release_dir="$INSTALL_ROOT/releases/$release_id"
 mkdir -p -m 700 "$INSTALL_ROOT/releases"
@@ -117,6 +134,7 @@ mv -Tf "$next_link" "$INSTALL_ROOT/current"
 mkdir -p "$(dirname "$COMMAND_PATH")"
 ln -sfn "$INSTALL_ROOT/current/install.sh" "$COMMAND_PATH"
 
+bootstrap_step 4 "Открываю интерактивный мастер"
 echo -e "  ${GREEN}✓${NC} Проверенный релиз ${release_id} активирован атомарно."
 echo -e "  ${YELLOW}i${NC} Данные и ключи в ${INSTALL_ROOT} не изменялись."
 echo ""

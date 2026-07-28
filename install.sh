@@ -11,6 +11,10 @@ set -uo pipefail
 MIGRATED_FROM="${MIGRATED_FROM:-}"   # init для set -u (выставляется в миграции)
 REANIM_PRESET_CHANGED=0   # оффер при апгрейде сменил пресет -> форсить регенерацию конфига
 TELEMT_VERSION_PREF="${TELEMT_VERSION_PREF:-}"   # выбор версии ядра на время установки
+DEPLOYMENT_ROLE="${DEPLOYMENT_ROLE:-}"   # hub | node | controller | standalone
+INSTALLER_PRESERVED_USERS="${INSTALLER_PRESERVED_USERS:-}"
+INSTALLER_APPLY_COMPLETED=0
+INSTALLER_DEFER_COMMIT=0
 
 # Script path and libraries
 SCRIPT_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
@@ -26,6 +30,7 @@ fi
 # Load libraries
 source "$LIB_DIR/common.sh"
 source "$LIB_DIR/i18n.sh"
+[ -f "$LIB_DIR/installer_ui.sh" ] && source "$LIB_DIR/installer_ui.sh"
 source "$LIB_DIR/telemt.sh"
 source "$LIB_DIR/telemt_config.sh"
 source "$LIB_DIR/website.sh"
@@ -39,6 +44,7 @@ source "$LIB_DIR/installer_wizard.sh"
 [ -f "$LIB_DIR/stats.sh" ] && source "$LIB_DIR/stats.sh"
 [ -f "$LIB_DIR/shared443.sh" ] && source "$LIB_DIR/shared443.sh"
 [ -f "$LIB_DIR/diagnose.sh" ] && source "$LIB_DIR/diagnose.sh"
+[ -f "$LIB_DIR/cluster.sh" ] && source "$LIB_DIR/cluster.sh"
 
 # Операторский интерфейс goTelegram Clean — только русский.
 load_language "ru"
@@ -204,7 +210,8 @@ submenu_manage() {
         echo -e "  ${CYAN}2${NC}) $(t manage_restore)"
         echo -e "  ${CYAN}3${NC}) $(t manage_update_telemt)"
         echo -e "  ${CYAN}4${NC}) $(t manage_site_ssl)"
-        echo -e "  ${CYAN}5${NC}) $(t manage_remove)"
+        echo -e "  ${CYAN}5${NC}) Сеть серверов"
+        echo -e "  ${CYAN}6${NC}) $(t manage_remove)"
         echo -e "  ${CYAN}0${NC}) $(t back)"
         echo -e "  ${DIM}$(printf '─%.0s' {1..54})${NC}"
         echo -ne "  ${WHITE}$(t choose):${NC} "
@@ -215,7 +222,8 @@ submenu_manage() {
             2) interactive_restore ;;
             3) telemt_version_change ;;
             4) menu_website ;;
-            5) menu_remove ;;
+            5) if type menu_cluster >/dev/null 2>&1; then menu_cluster; else log_error "Модуль сети не установлен"; fi ;;
+            6) menu_remove ;;
             0) break ;;
             *) log_error "$(t invalid_choice)" ;;
         esac
@@ -266,28 +274,41 @@ menu_version() {
 snapshot_preupgrade_state() {
     local marker="$GOTELEGRAM_DIR/.preupgrade_${GOTELEGRAM_VERSION}_done"
     [ -f "$marker" ] && return 0
-    mkdir -p "$BACKUP_DIR"
+    (
+        umask 077
+        mkdir -p -m 700 -- "$BACKUP_DIR" || exit 1
+        chmod 700 -- "$BACKUP_DIR" || exit 1
 
-    local ts tmp archive
-    ts=$(date +%Y%m%d_%H%M%S)
-    tmp="/tmp/gotelegram_preupgrade_${ts}"
-    archive="$BACKUP_DIR/preupgrade_${GOTELEGRAM_VERSION}_${ts}.tar.gz"
-    mkdir -p "$tmp"
+        local ts tmp archive archive_tmp
+        ts=$(date +%Y%m%d_%H%M%S)
+        tmp=$(mktemp -d /tmp/gotelegram-preupgrade.XXXXXX) || exit 1
+        cleanup_preupgrade_snapshot() {
+            case "${tmp:-}" in
+                /tmp/gotelegram-preupgrade.*) rm -rf -- "$tmp" ;;
+            esac
+            [ -n "${archive_tmp:-}" ] && rm -f -- "$archive_tmp"
+        }
+        trap cleanup_preupgrade_snapshot EXIT INT TERM HUP
+        archive="$BACKUP_DIR/preupgrade_${GOTELEGRAM_VERSION}_${ts}.tar.gz"
+        archive_tmp=$(mktemp "$BACKUP_DIR/.preupgrade_${GOTELEGRAM_VERSION}.XXXXXX") || exit 1
 
-    [ -f "$GOTELEGRAM_CONFIG" ] && mkdir -p "$tmp/opt/gotelegram" && cp "$GOTELEGRAM_CONFIG" "$tmp/opt/gotelegram/config.json" 2>/dev/null
-    [ -f "$TELEMT_CONFIG" ] && mkdir -p "$tmp/etc/telemt" && cp "$TELEMT_CONFIG" "$tmp/etc/telemt/config.toml" 2>/dev/null
-    if [ -f "$NGINX_SITE_CONF" ]; then
-        mkdir -p "$tmp$(dirname "$NGINX_SITE_CONF")"
-        cp "$NGINX_SITE_CONF" "$tmp$NGINX_SITE_CONF" 2>/dev/null
-    fi
-    [ -d "$WEBSITE_ROOT" ] && mkdir -p "$tmp/var/www/gotelegram-site" && cp -a "$WEBSITE_ROOT/." "$tmp/var/www/gotelegram-site/" 2>/dev/null
-    [ -f "$BOT_DIR/.env" ] && mkdir -p "$tmp/opt/gotelegram-bot" && cp "$BOT_DIR/.env" "$tmp/opt/gotelegram-bot/.env" 2>/dev/null
+        [ -f "$GOTELEGRAM_CONFIG" ] && mkdir -p "$tmp/opt/gotelegram" && cp "$GOTELEGRAM_CONFIG" "$tmp/opt/gotelegram/config.json" 2>/dev/null
+        [ -f "$TELEMT_CONFIG" ] && mkdir -p "$tmp/etc/telemt" && cp "$TELEMT_CONFIG" "$tmp/etc/telemt/config.toml" 2>/dev/null
+        if [ -f "$NGINX_SITE_CONF" ]; then
+            mkdir -p "$tmp$(dirname "$NGINX_SITE_CONF")"
+            cp "$NGINX_SITE_CONF" "$tmp$NGINX_SITE_CONF" 2>/dev/null
+        fi
+        [ -d "$WEBSITE_ROOT" ] && mkdir -p "$tmp/var/www/gotelegram-site" && cp -a "$WEBSITE_ROOT/." "$tmp/var/www/gotelegram-site/" 2>/dev/null
+        [ -f "$BOT_DIR/.env" ] && mkdir -p "$tmp/opt/gotelegram-bot" && cp "$BOT_DIR/.env" "$tmp/opt/gotelegram-bot/.env" 2>/dev/null
 
-    if tar czf "$archive" -C "$tmp" . 2>/dev/null; then
-        log_dim "Pre-upgrade snapshot: $archive"
-        touch "$marker" 2>/dev/null || true
-    fi
-    rm -rf "$tmp"
+        if tar czf "$archive_tmp" -C "$tmp" . 2>/dev/null; then
+            chmod 600 -- "$archive_tmp"
+            mv -f -- "$archive_tmp" "$archive"
+            archive_tmp=""
+            log_dim "Pre-upgrade snapshot: $archive"
+            touch "$marker" 2>/dev/null || true
+        fi
+    )
 }
 
 read_config_or_default() {
@@ -322,7 +343,7 @@ detect_template_source() {
 
 write_normalized_gotelegram_config() {
     local mode="$1" port="$2" secret="$3" mask_host="$4" domain="$5" tpl_id="$6" tpl_source="$7"
-    local lang installed_at stats_enabled tmp existing_config client_servers site_url
+    local lang installed_at stats_enabled tmp existing_config client_servers proxy_url server_label raw_proxy_url
     lang=$(read_config_or_default language "$(get_language 2>/dev/null || echo en)")
     installed_at=$(read_config_or_default installed_at "$(date -Iseconds)")
     stats_enabled=$(read_config_or_default stats_enabled "")
@@ -339,17 +360,28 @@ write_normalized_gotelegram_config() {
     client_servers=$(printf '%s' "$existing_config" | jq -c '
         .client_servers // [] | if type == "array" then . else [] end
     ' 2>/dev/null || echo '[]')
-    if [ "$(printf '%s' "$client_servers" | jq 'length' 2>/dev/null || echo 0)" = "0" ] && \
-       [ "$mode" = "pro" ] && [ -n "$domain" ]; then
-        if [ "$port" = "443" ]; then
-            site_url="https://${domain}"
-        else
-            site_url="https://${domain}:${port}"
-        fi
+    if [ "$mode" = "pro" ] && [ -n "$domain" ]; then
+        server_label="$domain"
+        raw_proxy_url=$(generate_proxy_link "$domain" "$port" "$secret" "$domain")
+    else
+        server_label=$(get_server_ip)
+        raw_proxy_url=$(generate_proxy_link "$server_label" "$port" "$secret" "$mask_host")
+    fi
+    proxy_url="https://t.me/proxy?${raw_proxy_url#tg://proxy?}"
+    client_servers=$(printf '%s' "$client_servers" | jq -c \
+        --arg url "$proxy_url" \
+        'map(
+            if ((.id // "") == "local") and
+               (((.url // "") | test("^https://(t\\.me|telegram\\.me|telegram\\.dog)/proxy\\?")) | not)
+            then .url = $url
+            else .
+            end
+        )')
+    if [ "$(printf '%s' "$client_servers" | jq 'length' 2>/dev/null || echo 0)" = "0" ]; then
         client_servers=$(jq -n \
             --arg id "local" \
-            --arg label "$domain" \
-            --arg url "$site_url" \
+            --arg label "$server_label" \
+            --arg url "$proxy_url" \
             '[{id: $id, label: $label, url: $url, enabled: true}]')
     fi
     tmp=$(mktemp) || return 1
@@ -719,14 +751,72 @@ show_upgrade_changelog() {
 }
 
 menu_install() {
-    if type installer_preflight_run >/dev/null 2>&1; then
-        installer_preflight_run || return
+    local selected_role existing_role selected_mode="" role_locked=0
+    local disclaimer_accepted=0 selection_status=0
+    INSTALLER_APPLY_COMPLETED=0
+    INSTALLER_DEFER_COMMIT=1
+    existing_role=$(config_get deployment_role 2>/dev/null || true)
+    if [ -n "$existing_role" ] && type cluster_valid_role >/dev/null 2>&1 &&
+       cluster_valid_role "$existing_role"; then
+        DEPLOYMENT_ROLE="$existing_role"
+        role_locked=1
+        if type ig_ui_logo >/dev/null 2>&1; then
+            ig_ui_logo "Безопасное обновление"
+            ig_ui_status ok "Найдена существующая установка" \
+                "$(installer_role_title "$existing_role") · ключи будут сохранены"
+        fi
+    else
+        DEPLOYMENT_ROLE=""
     fi
 
-    # Дисклеймер и любые записи — только после полностью read-only preflight.
-    show_disclaimer --gate || return
+    while true; do
+        if [ "$role_locked" != "1" ]; then
+            if DEPLOYMENT_ROLE=$(installer_choose_deployment_role); then
+                :
+            else
+                return
+            fi
+        fi
+        export DEPLOYMENT_ROLE
 
-    # Миграция допускается только после read-only preflight.
+        if type installer_preflight_run >/dev/null 2>&1; then
+            installer_preflight_run interactive
+            selection_status=$?
+            if [ "$selection_status" -eq 10 ]; then
+                [ "$role_locked" = "1" ] && return
+                DEPLOYMENT_ROLE=""
+                continue
+            fi
+            [ "$selection_status" -eq 0 ] || return
+        fi
+
+        # Дисклеймер и любые записи — только после полностью read-only preflight.
+        if [ "$disclaimer_accepted" != "1" ]; then
+            show_disclaimer --gate || return
+            disclaimer_accepted=1
+        fi
+
+        if type installer_choose_mode >/dev/null 2>&1; then
+            selected_mode=""
+            selected_mode=$(installer_choose_mode)
+            selection_status=$?
+            if [ "$selection_status" -eq 0 ]; then
+                break
+            fi
+            if [ "$selection_status" -eq 10 ]; then
+                [ "$role_locked" = "1" ] && return
+                DEPLOYMENT_ROLE=""
+                continue
+            fi
+            return
+        else
+            selected_mode="lite"
+            break
+        fi
+    done
+
+    # Миграция допускается только после read-only preflight и окончательного
+    # выбора роли/режима.
     if detect_v1_installation; then
         echo ""
         echo -e "  ${YELLOW}$(t v1_detected)${NC}"
@@ -735,17 +825,33 @@ menu_install() {
         migrate_v1_to_v2 || return
     fi
 
-    local selected_mode=""
-    if type installer_choose_mode >/dev/null 2>&1; then
-        selected_mode=$(installer_choose_mode) || return
-    else
-        selected_mode="lite"
-    fi
     case "$selected_mode" in
         pro) install_pro_mode ;;
         lite) install_lite_mode ;;
         *) log_error "Неизвестный сценарий установки: $selected_mode" ;;
     esac
+    [ "$INSTALLER_APPLY_COMPLETED" = "1" ] || return
+
+    if type cluster_finalize_deployment_role >/dev/null 2>&1; then
+        cluster_finalize_deployment_role "$DEPLOYMENT_ROLE" || {
+            log_error "Прокси установлен, но подключение роли «$(installer_role_title "$DEPLOYMENT_ROLE")» не завершено."
+            installer_transaction_rollback "не удалось завершить настройку роли сервера"
+            return 1
+        }
+    fi
+    installer_transaction_commit
+    INSTALLER_DEFER_COMMIT=0
+    if [ "$DEPLOYMENT_ROLE" = "hub" ]; then
+        install_admin_web || log_warning "Web-админка не установилась; её можно восстановить из меню."
+        if [ "$(bot_service_status)" = "not_installed" ]; then
+            echo ""
+            if confirm "Настроить единый Telegram-бот сейчас?"; then
+                bot_install || log_warning "Бот не установлен; повторите настройку из главного меню."
+            fi
+        fi
+    fi
+    type ig_ui_success >/dev/null 2>&1 &&
+        ig_ui_success "IGProxy готов" "$(installer_role_title "$DEPLOYMENT_ROLE")"
 }
 
 # ── Lite mode ───────────────────────────────────────────────────────────────
@@ -791,12 +897,24 @@ install_lite_mode() {
 
     # Generate secret
     local secret
-    secret=$(generate_hex 32)
+    INSTALLER_PRESERVED_USERS=$(get_telemt_users_block "$TELEMT_CONFIG" 2>/dev/null || true)
+    secret=$(get_telemt_main_secret "$TELEMT_CONFIG" 2>/dev/null || true)
+    [ -n "$secret" ] || secret=$(generate_hex 32)
+    if [ -n "$INSTALLER_PRESERVED_USERS" ] &&
+       ! telemt_users_block_has_main "$INSTALLER_PRESERVED_USERS"; then
+        INSTALLER_PRESERVED_USERS=$(printf 'main = "%s"\n%s\n' "$secret" "$INSTALLER_PRESERVED_USERS")
+    fi
 
     # Confirm
     local ip
     ip=$(get_server_ip)
-    echo ""
+    type ig_ui_clear >/dev/null 2>&1 && ig_ui_clear
+    if type ig_ui_logo >/dev/null 2>&1; then
+        ig_ui_logo "Готово к установке"
+        ig_ui_stepper 4 "Роль" "Проверка" "Публикация" "Установка"
+    else
+        echo ""
+    fi
     echo -e "  ${BOLD}${WHITE}$(t install_config_title)${NC}"
     echo -e "  $(t install_cfg_ip)         ${CYAN}${ip}${NC}"
     echo -e "  $(t install_cfg_port)       ${CYAN}${port}${NC}"
@@ -827,6 +945,11 @@ install_lite_mode() {
         installer_transaction_rollback "не удалось сформировать конфиг telemt"
         return
     }
+    if [ -n "$INSTALLER_PRESERVED_USERS" ] &&
+       ! replace_telemt_users_block "$INSTALLER_PRESERVED_USERS" "$TELEMT_CONFIG"; then
+        installer_transaction_rollback "не удалось восстановить существующие ключи"
+        return
+    fi
 
     # Validate
     validate_telemt_config || {
@@ -849,7 +972,7 @@ install_lite_mode() {
         installer_transaction_rollback "финальная проверка прокси не пройдена"
         return
     }
-    installer_transaction_commit
+    [ "$INSTALLER_DEFER_COMMIT" = "1" ] || installer_transaction_commit
 
     # Credits
     show_credits
@@ -857,6 +980,7 @@ install_lite_mode() {
     # Result
     show_proxy_info
     log_success "$(tf install_done "$GOTELEGRAM_VERSION" "Только прокси")"
+    INSTALLER_APPLY_COMPLETED=1
 
     log_dim "Сетевые sysctl, journald и firewall не изменялись. Оптимизацию можно запустить отдельно после проверки прокси."
 }
@@ -880,7 +1004,15 @@ install_pro_mode() {
     [ "$public_port" = "443" ] && warn_3xui_443_conflict || true
 
     # Домен
-    echo ""
+    type ig_ui_clear >/dev/null 2>&1 && ig_ui_clear
+    if type ig_ui_logo >/dev/null 2>&1; then
+        ig_ui_logo "Домен и HTTPS"
+        ig_ui_stepper 3 "Роль" "Проверка" "Публикация" "Установка"
+        ig_ui_heading "ДОМЕН" "Какой адрес использовать?" \
+            "Если подходящий сертификат уже существует, мастер подключит его без повторного выпуска."
+    else
+        echo ""
+    fi
     echo -ne "  ${WHITE}$(t install_enter_domain)${NC} "
     read -r user_domain
     user_domain="$(printf '%s' "$user_domain" | tr -d '[:space:]')"
@@ -893,30 +1025,29 @@ install_pro_mode() {
     if type installer_domain_preflight >/dev/null 2>&1; then
         installer_domain_preflight "$user_domain" || return
     fi
-    installer_firewall_check_ports "$public_port" 80 || return
+    if [ "${INSTALLER_DOMAIN_CERT_REUSED:-0}" = "1" ]; then
+        installer_firewall_check_ports "$public_port" || return
+    else
+        installer_firewall_check_ports "$public_port" 80 || return
+    fi
 
     # Email для Let's Encrypt (ленивый: пропускаем — LE без почты)
     local ssl_email=""
-    if [ "$lazy" != "1" ]; then
+    if [ "$lazy" != "1" ] && [ "${INSTALLER_DOMAIN_CERT_REUSED:-0}" != "1" ]; then
         echo -ne "  ${WHITE}$(t install_enter_email)${NC} "
         read -r ssl_email
+    elif [ "${INSTALLER_DOMAIN_CERT_REUSED:-0}" = "1" ]; then
+        log_dim "Email не запрашивается: используется существующий сертификат."
     fi
 
-    # Выбор шаблона
-    local template_dir=""
+    # Выбор встроенной витрины IGProxy. Сторонний каталог в новом мастере не
+    # показываем: все эти страницы уже находятся внутри проверенного релиза.
+    local site_preset_id=""
     if [ "$lazy" = "1" ]; then
-        type load_catalog >/dev/null 2>&1 && load_catalog >/dev/null 2>&1 || true
-        local _rtpl; _rtpl=$(pick_random_template_id 2>/dev/null)
-        if [ -n "$_rtpl" ]; then
-            log_dim "$(tf lazy_template "$_rtpl")"
-            template_dir=$(download_template "$_rtpl" 2>/dev/null) || template_dir=""
-        fi
-        if [ -z "$template_dir" ]; then
-            template_dir=$(interactive_template_selection) || return
-        fi
+        site_preset_id="random-gallery"
+        log_dim "Выбрана встроенная витрина: Рандомный сайт."
     else
-        template_dir=$(interactive_template_selection)
-        [ $? -ne 0 ] && return
+        site_preset_id=$(interactive_igproxy_site_preset_selection) || return
     fi
 
     local nginx_internal_port
@@ -934,19 +1065,34 @@ install_pro_mode() {
     echo -e "  ${DIM}$(tf install_arch_desc3 "$user_domain" "$public_port")${NC}"
 
     # Fake-TLS секрет (ee + secret + hex домена)
-    local raw_secret; raw_secret=$(generate_hex 32)
+    local raw_secret
+    INSTALLER_PRESERVED_USERS=$(get_telemt_users_block "$TELEMT_CONFIG" 2>/dev/null || true)
+    raw_secret=$(get_telemt_main_secret "$TELEMT_CONFIG" 2>/dev/null || true)
+    [ -n "$raw_secret" ] || raw_secret=$(generate_hex 32)
+    if [ -n "$INSTALLER_PRESERVED_USERS" ] &&
+       ! telemt_users_block_has_main "$INSTALLER_PRESERVED_USERS"; then
+        INSTALLER_PRESERVED_USERS=$(printf 'main = "%s"\n%s\n' "$raw_secret" "$INSTALLER_PRESERVED_USERS")
+    fi
     local domain_hex; domain_hex=$(printf '%s' "$user_domain" | xxd -p | tr -d '\n')
     local faketls_secret="ee${raw_secret}${domain_hex}"
+    local proxy_link="https://t.me/proxy?server=${user_domain}&port=${public_port}&secret=${faketls_secret}"
 
     # Сводка
-    echo ""
+    type ig_ui_clear >/dev/null 2>&1 && ig_ui_clear
+    if type ig_ui_logo >/dev/null 2>&1; then
+        ig_ui_logo "Готово к установке"
+        ig_ui_stepper 4 "Роль" "Проверка" "Публикация" "Установка"
+    else
+        echo ""
+    fi
     echo -e "  ${BOLD}${WHITE}$(t install_config_title)${NC}"
     echo -e "  $(t install_cfg_domain)      ${CYAN}${user_domain}${NC}"
     echo -e "  $(t install_cfg_port)       ${CYAN}${public_port} (telemt)${NC}"
     echo -e "  Внутренний сайт:      ${CYAN}127.0.0.1:${nginx_internal_port}${NC}"
     echo -e "  $(t install_cfg_mode)      ${MAGENTA}Свой домен и сайт${NC}"
     echo ""
-    installer_show_apply_plan "pro" "$public_port" "$user_domain" "$nginx_internal_port"
+    installer_show_apply_plan "pro" "$public_port" "$user_domain" "$nginx_internal_port" \
+        "${INSTALLER_DOMAIN_HTTP_LISTENER:-1}"
 
     if [ "$lazy" = "1" ]; then
         log_info "$(t lazy_autoconfirm)"
@@ -955,6 +1101,7 @@ install_pro_mode() {
     fi
 
     INSTALLER_TX_DOMAIN="$user_domain"
+    INSTALLER_TX_CERT_NAME="${INSTALLER_DOMAIN_CERT_LINEAGE:-}"
     installer_transaction_begin "domain-site:$public_port" || return
 
     # Установка
@@ -975,9 +1122,14 @@ install_pro_mode() {
         installer_transaction_rollback "не удалось сформировать конфиг telemt"
         return
     }
+    if [ -n "$INSTALLER_PRESERVED_USERS" ] &&
+       ! replace_telemt_users_block "$INSTALLER_PRESERVED_USERS" "$TELEMT_CONFIG"; then
+        installer_transaction_rollback "не удалось восстановить существующие ключи"
+        return
+    fi
 
     # Ленивый: 5 ключей (main + key2..key5). Charset имён [A-Za-z0-9_.-] — безопасно.
-    if [ "$lazy" = "1" ]; then
+    if [ "$lazy" = "1" ] && [ -z "$INSTALLER_PRESERVED_USERS" ]; then
         local ub="main = \"$raw_secret\"" i
         for i in 2 3 4 5; do
             ub="${ub}
@@ -987,8 +1139,14 @@ key${i} = \"$(generate_hex 32)\""
         log_info "$(tf lazy_keys_created 5)"
     fi
 
-    # Сайт (nginx + certbot + шаблон)
-    setup_pro_mode "$user_domain" "$template_dir" "$nginx_internal_port" "$ssl_email" "$public_port" || {
+    # Сайт (nginx + certbot + встроенная витрина)
+    local template_dir
+    template_dir=$(prepare_igproxy_site_preset "$site_preset_id" "$proxy_link") || {
+        installer_transaction_rollback "не удалось подготовить встроенную витрину"
+        return
+    }
+    setup_pro_mode "$user_domain" "$template_dir" "$nginx_internal_port" "$ssl_email" "$public_port" \
+        "${INSTALLER_DOMAIN_HTTP_LISTENER:-1}" || {
         installer_transaction_rollback "не удалось настроить сайт или сертификат"
         return
     }
@@ -1002,15 +1160,18 @@ key${i} = \"$(generate_hex 32)\""
         installer_transaction_rollback "не удалось сохранить настройки"
         return
     }
+    bot_update_config_field "site_preset" "$site_preset_id" >/dev/null 2>&1 || true
+    bot_update_config_field "site_key" "main" >/dev/null 2>&1 || true
     installer_verify_install "pro" "$public_port" "$user_domain" || {
         installer_transaction_rollback "финальная проверка прокси и сайта не пройдена"
         return
     }
-    installer_transaction_commit
+    [ "$INSTALLER_DEFER_COMMIT" = "1" ] || installer_transaction_commit
 
     show_proxy_info_pro "$user_domain" "$faketls_secret" "$public_port" "$nginx_internal_port"
     echo -e "  ${WHITE}$(t svc_site):${NC} ${GREEN}$(format_https_url "$user_domain" "$public_port")${NC}"
     log_success "$(tf install_done "$GOTELEGRAM_VERSION" "Свой домен и сайт")"
+    INSTALLER_APPLY_COMPLETED=1
 
     log_dim "Сетевые sysctl, journald и firewall не изменялись. Оптимизацию можно запустить отдельно после проверки прокси."
 }

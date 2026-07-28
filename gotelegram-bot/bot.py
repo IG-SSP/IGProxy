@@ -19,6 +19,7 @@ import secrets
 import shlex
 import shutil
 import subprocess
+import tempfile
 import sys
 import time
 import toml
@@ -26,7 +27,7 @@ from datetime import datetime
 from io import StringIO
 from pathlib import Path
 from typing import Tuple, Optional, List, Dict, Any
-from urllib.parse import quote, urlparse
+from urllib.parse import parse_qs, quote, urlparse
 
 from dotenv import load_dotenv
 from telegram import (
@@ -35,7 +36,6 @@ from telegram import (
     InlineKeyboardMarkup,
     ReplyKeyboardMarkup,
     ReplyKeyboardRemove,
-    WebAppInfo,
 )
 from telegram.ext import (
     Application,
@@ -110,7 +110,7 @@ def _read_gotelegram_version() -> str:
                 return str(_v)
     except Exception:
         pass
-    return "2.12.1"
+    return "2.14.0"
 
 
 GOTELEGRAM_VERSION = _read_gotelegram_version()
@@ -378,14 +378,31 @@ def load_toml(path: str) -> Optional[Dict]:
 
 def save_json(path: str, data: Dict) -> bool:
     """Save JSON file."""
+    temp_path = ""
     try:
         os.makedirs(os.path.dirname(path), exist_ok=True)
-        with open(path, "w") as f:
+        fd, temp_path = tempfile.mkstemp(
+            prefix=f".{os.path.basename(path)}.",
+            dir=os.path.dirname(path),
+        )
+        with os.fdopen(fd, "w") as f:
             json.dump(data, f, indent=2)
+            f.write("\n")
+            f.flush()
+            os.fsync(f.fileno())
+        os.chmod(temp_path, 0o600)
+        os.replace(temp_path, path)
+        temp_path = ""
         return True
     except Exception as e:
         logger.error(f"Failed to save {path}: {e}")
         return False
+    finally:
+        if temp_path:
+            try:
+                os.unlink(temp_path)
+            except OSError:
+                pass
 
 
 def template_display_name(template_id: str) -> str:
@@ -642,14 +659,26 @@ def get_client_servers() -> List[Dict[str, Any]]:
         label = str(item.get("label") or "").strip()[:48]
         url = str(item.get("url") or "").strip()
         item_id = re.sub(r"[^a-z0-9_-]", "", str(item.get("id") or "").lower())[:24]
-        if label and url.startswith("https://"):
+        if label and is_proxy_url(url):
             result.append({
                 "id": item_id or hashlib.sha256(f"{label}\0{url}".encode()).hexdigest()[:8],
                 "label": label,
                 "url": url,
                 "enabled": bool(item.get("enabled", True)),
+                "managed": bool(item.get("managed", False)),
             })
     return result
+
+
+def is_proxy_url(value: str) -> bool:
+    parsed = urlparse(value)
+    query = parse_qs(parsed.query)
+    return (
+        parsed.scheme == "https"
+        and (parsed.hostname or "").lower() in {"t.me", "telegram.me", "telegram.dog"}
+        and parsed.path.rstrip("/") == "/proxy"
+        and all(query.get(key, [""])[0] for key in ("server", "port", "secret"))
+    )
 
 
 def client_menu_text() -> str:
@@ -658,7 +687,7 @@ def client_menu_text() -> str:
     return (
         f"<b>{html.escape(title)}</b>\n"
         "<i>Выбор сервера</i>\n\n"
-        "Выберите доступный узел. Сайт откроется внутри Telegram."
+        "Выберите сервер — Telegram сразу предложит подключить прокси."
     )
 
 
@@ -666,7 +695,7 @@ def get_client_menu(*, admin_back: bool = False) -> Optional[InlineKeyboardMarku
     rows = [
         [InlineKeyboardButton(
             f"🌐 {item['label']}",
-            web_app=WebAppInfo(url=item["url"]),
+            url=item["url"],
         )]
         for item in get_client_servers()
         if item["enabled"]
@@ -685,7 +714,12 @@ def get_client_menu(*, admin_back: bool = False) -> Optional[InlineKeyboardMarku
 def save_client_servers(servers: List[Dict[str, Any]]) -> bool:
     with FileLock("/run/gotelegram/config.lock"):
         config = load_json(GOTELEGRAM_CONFIG) or {}
-        config["client_servers"] = servers
+        managed = [
+            item for item in (config.get("client_servers") or [])
+            if isinstance(item, dict) and bool(item.get("managed", False))
+        ]
+        manual = [item for item in servers if not bool(item.get("managed", False))]
+        config["client_servers"] = manual + managed
         config["updated_at"] = datetime.now().astimezone().isoformat()
         ok = save_json(GOTELEGRAM_CONFIG, config)
         if ok:
@@ -716,7 +750,7 @@ async def cb_client_servers(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     text = (
         "<b>🌐 Клиентские серверы</b>\n\n"
         "Обычные пользователи видят только включённые кнопки. "
-        "Формат Mini App требует публичную HTTPS-витрину.\n\n"
+        "Каждая кнопка содержит прямую ссылку подключения https://t.me/proxy.\n\n"
         f"Настроено серверов: <b>{len(servers)}</b>"
     )
     await safe_edit_message(
@@ -752,8 +786,7 @@ async def cb_client_server_add(update: Update, context: ContextTypes.DEFAULT_TYP
         query,
         "<b>Новый клиентский сервер</b>\n\n"
         "Пришлите одной строкой:\n"
-        "<code>Подпись кнопки | https://домен</code>\n\n"
-        "Например:\n<code>Амстердам · быстрый | https://ams.example.com</code>",
+        "<code>Подпись кнопки | https://t.me/proxy?...</code>",
         reply_markup=InlineKeyboardMarkup([[
             InlineKeyboardButton("Отмена", callback_data="menu_client_servers"),
         ]]),
@@ -772,19 +805,23 @@ async def cb_client_server_view(update: Update, context: ContextTypes.DEFAULT_TY
     text = (
         f"<b>{html.escape(item['label'])}</b>\n\n"
         f"Состояние: {'показывается клиентам' if item['enabled'] else 'скрыт'}\n"
-        f"Витрина: {html.escape(item['url'])}"
+        f"Ссылка подключения: {html.escape(item['url'])}"
+        + ("\n\n<i>Узел добавлен автоматически. Управляйте им через раздел сети.</i>" if item["managed"] else "")
     )
-    keyboard = InlineKeyboardMarkup([
-        [
-            InlineKeyboardButton("✏ Изменить", callback_data=f"client_server_edit_{item_id}"),
-            InlineKeyboardButton(
-                "Скрыть" if item["enabled"] else "Показать",
-                callback_data=f"client_server_toggle_{item_id}",
-            ),
-        ],
-        [InlineKeyboardButton("🗑 Удалить", callback_data=f"client_server_delete_{item_id}")],
-        [InlineKeyboardButton("‹ К списку", callback_data="menu_client_servers")],
-    ])
+    rows = []
+    if not item["managed"]:
+        rows.extend([
+            [
+                InlineKeyboardButton("✏ Изменить", callback_data=f"client_server_edit_{item_id}"),
+                InlineKeyboardButton(
+                    "Скрыть" if item["enabled"] else "Показать",
+                    callback_data=f"client_server_toggle_{item_id}",
+                ),
+            ],
+            [InlineKeyboardButton("🗑 Удалить", callback_data=f"client_server_delete_{item_id}")],
+        ])
+    rows.append([InlineKeyboardButton("‹ К списку", callback_data="menu_client_servers")])
+    keyboard = InlineKeyboardMarkup(rows)
     await safe_edit_message(query, text, reply_markup=keyboard, parse_mode="HTML")
 
 
@@ -792,16 +829,20 @@ async def cb_client_server_edit(update: Update, context: ContextTypes.DEFAULT_TY
     query = update.callback_query
     item_id = query.data.removeprefix("client_server_edit_")
     item = next((entry for entry in get_client_servers() if entry["id"] == item_id), None)
-    await query.answer()
     if not item:
+        await query.answer()
         await cb_client_servers(update, context)
         return
+    if item["managed"]:
+        await query.answer("Автоматический узел настраивается через центр", show_alert=True)
+        return
+    await query.answer()
     context.user_data["awaiting_client_server"] = {"mode": "edit", "id": item_id}
     await safe_edit_message(
         query,
         "<b>Изменение сервера</b>\n\n"
         "Пришлите новые данные:\n"
-        "<code>Подпись кнопки | https://домен</code>",
+        "<code>Подпись кнопки | https://t.me/proxy?...</code>",
         reply_markup=InlineKeyboardMarkup([[
             InlineKeyboardButton("Отмена", callback_data=f"client_server_view_{item_id}"),
         ]]),
@@ -815,6 +856,9 @@ async def cb_client_server_toggle(update: Update, context: ContextTypes.DEFAULT_
     servers = get_client_servers()
     for item in servers:
         if item["id"] == item_id:
+            if item["managed"]:
+                await query.answer("Автоматический узел настраивается через центр", show_alert=True)
+                return
             item["enabled"] = not item["enabled"]
             break
     if not save_client_servers(servers):
@@ -827,10 +871,14 @@ async def cb_client_server_delete(update: Update, context: ContextTypes.DEFAULT_
     query = update.callback_query
     item_id = query.data.removeprefix("client_server_delete_")
     item = next((entry for entry in get_client_servers() if entry["id"] == item_id), None)
-    await query.answer()
     if not item:
+        await query.answer()
         await cb_client_servers(update, context)
         return
+    if item["managed"]:
+        await query.answer("Автоматический узел нельзя удалить из каталога вручную", show_alert=True)
+        return
+    await query.answer()
     await safe_edit_message(
         query,
         f"Удалить кнопку <b>{html.escape(item['label'])}</b>?",
@@ -845,7 +893,11 @@ async def cb_client_server_delete(update: Update, context: ContextTypes.DEFAULT_
 async def cb_client_server_delete_yes(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     query = update.callback_query
     item_id = query.data.removeprefix("client_server_delete_yes_")
-    servers = [item for item in get_client_servers() if item["id"] != item_id]
+    current = get_client_servers()
+    if any(item["id"] == item_id and item["managed"] for item in current):
+        await query.answer("Автоматический узел нельзя удалить вручную", show_alert=True)
+        return
+    servers = [item for item in current if item["id"] != item_id]
     if not save_client_servers(servers):
         await query.answer("Не удалось сохранить", show_alert=True)
         return
@@ -1060,7 +1112,16 @@ async def get_status_text(user_id: Optional[int] = None) -> str:
         active_ips += int(data.get("active_unique_ips") or 0)
         online_keys += int(current > 0)
     running = sum(1 for value in services.values() if value == "running")
-    dc_count = max(1, int(config.get("network_dc_count") or 1))
+    cluster_nodes = config.get("cluster_nodes") if isinstance(config.get("cluster_nodes"), list) else []
+    if cluster_nodes:
+        dc_count = 1 + sum(
+            1 for item in cluster_nodes
+            if isinstance(item, dict)
+            and bool(item.get("approved", True))
+            and int(time.time()) - int(item.get("last_seen") or 0) <= 180
+        )
+    else:
+        dc_count = max(1, int(config.get("network_dc_count") or 1))
     port = int(config.get("port") or 443)
     appearance = get_appearance()
     status_title = (
@@ -3468,16 +3529,15 @@ async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE
         raw = update.message.text.strip()
         if "|" not in raw:
             await update.message.reply_text(
-                "Нужен формат: <code>Подпись | https://домен</code>",
+                "Нужен формат: <code>Подпись | https://t.me/proxy?...</code>",
                 parse_mode="HTML",
             )
             context.user_data["awaiting_client_server"] = pending_server
             return
         label, url = (part.strip() for part in raw.split("|", 1))
-        parsed = urlparse(url)
-        if not label or len(label) > 48 or parsed.scheme != "https" or not parsed.hostname:
+        if not label or len(label) > 48 or not is_proxy_url(url):
             await update.message.reply_text(
-                "Проверьте подпись и публичную HTTPS-ссылку.",
+                "Проверьте подпись и прямую ссылку https://t.me/proxy.",
             )
             context.user_data["awaiting_client_server"] = pending_server
             return
@@ -3528,10 +3588,11 @@ async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE
         return
     # Success — record in goTelegram Pro config. Use "template_id" (canonical
     # field name written by install.sh/save_gotelegram_config).
-    config = load_json(GOTELEGRAM_CONFIG) or {}
-    config["template_id"] = tpl_id
-    config["template_source"] = url
-    save_json(GOTELEGRAM_CONFIG, config)
+    with FileLock("/run/gotelegram/config.lock"):
+        config = load_json(GOTELEGRAM_CONFIG) or {}
+        config["template_id"] = tpl_id
+        config["template_source"] = url
+        save_json(GOTELEGRAM_CONFIG, config)
     if config.get("mode") == "pro" and os.path.isdir(info):
         try:
             os.makedirs(WEBSITE_ROOT, exist_ok=True)

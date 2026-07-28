@@ -16,6 +16,10 @@ BUILDER = ROOT / "tools" / "build_release.py"
 
 
 class ReleaseSecurityTests(unittest.TestCase):
+    def test_default_portable_installer_name_is_stable(self):
+        source = (ROOT / "tools" / "build_portable_installer.py").read_text(encoding="utf-8")
+        self.assertIn('default=ROOT.parent / "build" / "IGProxy"', source)
+
     def test_portable_installer_is_deterministic_and_embeds_verified_release(self):
         module_path = ROOT / "tools" / "build_portable_installer.py"
         spec = importlib.util.spec_from_file_location("portable_builder", module_path)
@@ -73,6 +77,55 @@ class ReleaseSecurityTests(unittest.TestCase):
                     stream = archive.extractfile(name)
                     self.assertIsNotNone(stream)
                     self.assertEqual(hashlib.sha256(stream.read()).hexdigest(), expected)
+
+    def test_release_builder_rejects_secret_files_and_content(self):
+        spec = importlib.util.spec_from_file_location("release_builder", BUILDER)
+        module = importlib.util.module_from_spec(spec)
+        assert spec.loader is not None
+        spec.loader.exec_module(module)
+
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            env_file = root / ".env"
+            env_file.write_text("BOT_TOKEN=placeholder", encoding="utf-8")
+            with self.assertRaisesRegex(RuntimeError, "sensitive filename"):
+                module.validate_release_file(env_file, Path(".env"))
+
+            token_file = root / "settings.txt"
+            token_file.write_text(
+                "BOT_TOKEN=123456789:ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghi",
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(RuntimeError, "Telegram bot token"):
+                module.validate_release_file(token_file, Path("settings.txt"))
+
+    def test_release_builder_rejects_symlink_escape(self):
+        spec = importlib.util.spec_from_file_location("release_builder", BUILDER)
+        module = importlib.util.module_from_spec(spec)
+        assert spec.loader is not None
+        spec.loader.exec_module(module)
+
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp) / "root"
+            root.mkdir()
+            outside = Path(temp) / "outside.txt"
+            outside.write_text("not part of the release", encoding="utf-8")
+            link = root / "innocent.txt"
+            try:
+                link.symlink_to(outside)
+            except OSError:
+                self.skipTest("symlinks unavailable")
+            with self.assertRaisesRegex(RuntimeError, "symlink"):
+                module.validate_release_source(link, Path("innocent.txt"), root)
+
+    def test_preupgrade_snapshot_is_private_and_uses_unpredictable_paths(self):
+        source = (ROOT / "install.sh").read_text(encoding="utf-8")
+        body = source[source.index("snapshot_preupgrade_state()"):source.index("read_config_or_default()")]
+        self.assertIn("umask 077", body)
+        self.assertIn("mktemp -d /tmp/gotelegram-preupgrade.XXXXXX", body)
+        self.assertIn('chmod 700 -- "$BACKUP_DIR"', body)
+        self.assertIn('chmod 600 -- "$archive_tmp"', body)
+        self.assertNotIn('tmp="/tmp/gotelegram_preupgrade_${ts}"', body)
 
     def test_backup_code_uses_private_tempdirs_and_no_password_argv(self):
         source = BACKUP.read_text(encoding="utf-8")

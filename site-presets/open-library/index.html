@@ -13,7 +13,7 @@
     p{max-width:550px;font-size:clamp(18px,2vw,23px);line-height:1.6;color:#ddd2e9}
     .actions{display:flex;gap:10px;flex-wrap:wrap;margin-top:30px}a,button{display:inline-flex;padding:18px 28px;border-radius:14px;font:inherit;font-weight:800;cursor:pointer;transition:.25s}a{background:#7fe3f0;color:#17102a;text-decoration:none;box-shadow:0 16px 50px rgba(79,203,229,.2)}button{border:1px solid rgba(255,255,255,.18);background:rgba(24,10,39,.72);color:#fffaf1}
     a:hover{transform:translateY(-3px) rotate(-.4deg);box-shadow:0 20px 60px rgba(79,203,229,.34)}
-    small{display:block;margin-top:18px;color:#a99bb8}
+    small{display:block;margin-top:18px;color:#a99bb8}.handoff{margin-top:12px;font-size:12px;line-height:1.4;color:#b7abc4}
     @keyframes librarySail{to{background-position:center,58% center}}@media(max-width:700px){html,body{height:100%;overflow:hidden}body{background:linear-gradient(0deg,rgba(15,4,28,.99) 0%,rgba(15,4,28,.78) 58%,rgba(15,4,28,.12) 100%),url("hero.webp") 72% center/cover no-repeat}main{height:100svh;min-height:0;align-items:flex-end;padding:20px}article{max-height:100%}.mark{font-size:10px}h1{font-size:clamp(36px,11vw,49px);margin:14px 0}p{font-size:14px;line-height:1.42}.actions{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:16px}.actions>*{width:100%;justify-content:center;padding:13px 9px;font-size:13px}small{margin-top:10px;font-size:11px}}@media(prefers-reduced-motion:reduce){body{animation:none}}
   </style>
 </head>
@@ -22,9 +22,10 @@
     <div class="mark">История о правилах и окнах</div>
     <h1>Библиотека открытых окон</h1>
     <p>Совы исправно закрывали ставни по инструкции. Но книги давно научились складываться в лодки и читать море самостоятельно.</p>
-    <div class="actions"><a id="connect" href="__PROXY_LINK__">Продолжить чтение</a><button id="copy" type="button">Скопировать ссылку</button></div>
+    <div class="actions"><a id="connect" href="__PROXY_TG_LINK__">Продолжить чтение</a><button id="copy" type="button">Скопировать ссылку</button></div>
+    <p class="handoff">Если переплёт не открывается снаружи, отправьте ссылку себе в Telegram и коснитесь её там.</p>
     <small id="status">Большое окно всё ещё открыто.</small>
   </article></main>
-  <script>const a=document.getElementById("connect"),s=document.getElementById("status");document.getElementById("copy").onclick=async()=>{try{await navigator.clipboard.writeText(a.href)}catch(e){const t=document.createElement("textarea");t.value=a.href;document.body.appendChild(t);t.select();document.execCommand("copy");t.remove()}s.textContent="Ссылка скопирована"};</script>
+  <script>const link="__PROXY_LINK__",s=document.getElementById("status");document.getElementById("copy").onclick=async()=>{try{await navigator.clipboard.writeText(link)}catch(e){const t=document.createElement("textarea");t.value=link;document.body.appendChild(t);t.select();document.execCommand("copy");t.remove()}s.textContent="Ссылка скопирована"};</script>
 </body>
 </html>

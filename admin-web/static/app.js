@@ -1152,9 +1152,16 @@ function renderOverview() {
   const activeIps = state.users.reduce((sum, user) => sum + (Number(user.traffic?.active_unique_ips) || 0), 0);
   $("#portPublicAddress").textContent = `${cfg.domain || cfg.mask_host || "сервер"}:${cfg.port || 443}`;
   $("#portCurrentRate").textContent = `${fmtBytes(currentRate)}/с`;
-  $("#portNetworkDc").textContent = state.health?.dc?.available
-    ? `${state.health.dc.reachable || 0}/${state.health.dc.total || 0}`
-    : (cfg.network_dc_count || 1);
+  const clusterNodes = Array.isArray(cfg.cluster_nodes) ? cfg.cluster_nodes : [];
+  const clusterOnline = 1 + clusterNodes.filter((node) => (
+    node?.approved !== false
+    && ((Date.now() / 1000) - (Number(node?.last_seen) || 0)) <= 180
+  )).length;
+  $("#portNetworkDc").textContent = clusterNodes.length
+    ? `${clusterOnline}/${1 + clusterNodes.length}`
+    : (state.health?.dc?.available
+      ? `${state.health.dc.reachable || 0}/${state.health.dc.total || 0}`
+      : (cfg.network_dc_count || 1));
   $("#portConnections").textContent = liveConnections;
   $("#portActiveIps").textContent = activeIps;
   if (!state.generalSettingsDirty) $("#networkDcCount").value = cfg.network_dc_count || 1;
@@ -1902,7 +1909,7 @@ function renderClientServers() {
   list.innerHTML = state.clientServers.map((item, index) => `
     <div class="client-server-row" data-client-server="${index}">
       <label>Подпись<input data-server-label type="text" maxlength="48" value="${escapeAttr(item.label || "")}" placeholder="Амстердам"></label>
-      <label>HTTPS-витрина<input data-server-url type="url" value="${escapeAttr(item.url || "")}" placeholder="https://proxy.example.com"></label>
+      <label>Ссылка подключения<input data-server-url type="url" value="${escapeAttr(item.url || "")}" placeholder="https://t.me/proxy?server=..."></label>
       <label class="setting-check"><input data-server-enabled type="checkbox" ${item.enabled !== false ? "checked" : ""}> Показывать</label>
       <button type="button" class="danger soft" data-remove-client-server="${index}">Удалить</button>
       <input data-server-id type="hidden" value="${escapeAttr(item.id || "")}">

@@ -21,6 +21,7 @@ if _RELEASE_SPEC is None or _RELEASE_SPEC.loader is None:
 _RELEASE_MODULE = importlib.util.module_from_spec(_RELEASE_SPEC)
 _RELEASE_SPEC.loader.exec_module(_RELEASE_MODULE)
 build_release = _RELEASE_MODULE.build
+tracked_release_file = _RELEASE_MODULE.tracked_release_file
 
 
 def digest_bytes(payload: bytes) -> str:
@@ -33,7 +34,8 @@ def build(output: Path) -> str:
     archive = output.with_name(f".{output.name}.payload.tar.gz")
     archive_sha = build_release(archive)
     archive_bytes = archive.read_bytes()
-    bootstrap = (ROOT / "bootstrap.sh").read_text(encoding="utf-8")
+    bootstrap_path = tracked_release_file("bootstrap.sh")
+    bootstrap = bootstrap_path.read_text(encoding="utf-8")
     archive.unlink()
     archive.with_suffix(archive.suffix + ".sha256").unlink(missing_ok=True)
 
@@ -89,7 +91,7 @@ def main() -> None:
     parser.add_argument(
         "--output",
         type=Path,
-        default=ROOT.parent / "build" / "gotelegram-installer.run",
+        default=ROOT.parent / "build" / "IGProxy",
     )
     args = parser.parse_args()
     print(build(args.output))

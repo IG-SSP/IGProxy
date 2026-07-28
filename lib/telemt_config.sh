@@ -1,5 +1,5 @@
 #!/bin/bash
-# IGProxy v2.12.1 — генерация TOML-конфигурации для telemt
+# IGProxy v2.13.0 — генерация TOML-конфигурации для telemt
 
 # ── Популярные домены (не заблокированные в РФ) ──────────────────────────────
 QUICK_DOMAINS=(
@@ -344,6 +344,28 @@ first_telemt_user_secret() {
     get_telemt_users_block "$config" | head -1 | sed 's/^[^=]*=[[:space:]]*//; s/^"//; s/".*$//' | tr -d ' '
 }
 
+get_telemt_main_secret() {
+    local config="${1:-$TELEMT_CONFIG}"
+    get_telemt_users_block "$config" | awk -F= '
+        {
+            key=$1
+            gsub(/^[[:space:]]+|[[:space:]]+$/, "", key)
+            if (key ~ /^".*"$/ || key ~ /^\047.*\047$/) {
+                key=substr(key, 2, length(key) - 2)
+            }
+            if (key == "main") {
+                value=substr($0, index($0, "=") + 1)
+                gsub(/^[[:space:]]+|[[:space:]]+$/, "", value)
+                if (value ~ /^".*"$/ || value ~ /^\047.*\047$/) {
+                    value=substr(value, 2, length(value) - 2)
+                }
+                print value
+                exit
+            }
+        }
+    '
+}
+
 telemt_users_block_has_main() {
     local users_block="$1"
     printf '%s\n' "$users_block" | awk -F= '
@@ -369,14 +391,27 @@ replace_telemt_users_block() {
     [ -f "$config" ] || return 1
     [ -n "$users_block" ] || return 0
 
-    local tmp
-    tmp=$(mktemp) || return 1
-    awk -v users="$users_block" '
-        BEGIN { split(users, lines, "\n") }
+    local tmp users_file status
+    tmp=$(mktemp "$(dirname "$config")/.users-next.XXXXXX") || return 1
+    users_file=$(mktemp "$(dirname "$config")/.users-secret.XXXXXX") || {
+        rm -f -- "$tmp"
+        return 1
+    }
+    chmod 600 "$tmp" "$users_file"
+    printf '%s\n' "$users_block" > "$users_file" || {
+        rm -f -- "$tmp" "$users_file"
+        return 1
+    }
+    awk -v users_file="$users_file" '
+        BEGIN {
+            count=0
+            while ((getline line < users_file) > 0) lines[++count]=line
+            close(users_file)
+        }
         /^\[access\.users\]/ {
             found=1
             print
-            for (i = 1; i in lines; i++) {
+            for (i = 1; i <= count; i++) {
                 if (lines[i] != "") print lines[i]
             }
             in_users=1
@@ -389,12 +424,15 @@ replace_telemt_users_block() {
             if (!found) {
                 print ""
                 print "[access.users]"
-                for (i = 1; i in lines; i++) {
+                for (i = 1; i <= count; i++) {
                     if (lines[i] != "") print lines[i]
                 }
             }
         }
     ' "$config" > "$tmp" && mv "$tmp" "$config"
+    status=$?
+    rm -f -- "$tmp" "$users_file"
+    [ "$status" -eq 0 ] || return "$status"
     chmod 600 "$config"
 }
 

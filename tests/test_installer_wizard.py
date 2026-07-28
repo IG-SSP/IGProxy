@@ -33,6 +33,9 @@ class InstallerWizardTests(unittest.TestCase):
         self.assertIn("$existing_config + {", source)
         self.assertIn("--argjson client_servers", source)
         self.assertIn('{id: $id, label: $label, url: $url, enabled: true}', source)
+        self.assertIn('proxy_url="https://t.me/proxy?', source)
+        self.assertIn('generate_proxy_link "$domain" "$port" "$secret" "$domain"', source)
+        self.assertIn('((.id // "") == "local")', source)
 
     def test_free_443_is_recommended(self):
         result = run_bash(
@@ -55,6 +58,21 @@ installer_pick_recommended_port
         )
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(result.stdout.strip(), "9443")
+
+    def test_custom_port_is_entered_directly_not_as_menu_option(self):
+        result = run_bash(
+            """
+installer_pick_recommended_port() { printf '8443\\n'; }
+installer_port_is_usable() { [ "$1" = 8443 ] || [ "$1" = 9443 ]; }
+installer_port_owner_label() { printf 'занят nginx'; }
+log_error() { printf '%s\\n' "$*" >&2; }
+printf '9443\\n' | installer_choose_public_port
+"""
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout.strip(), "9443")
+        self.assertIn("Введите номер порта [8443]", result.stderr)
+        self.assertIn("443 не предлагается", result.stderr)
 
     def test_all_candidate_ports_busy_is_hard_failure(self):
         result = run_bash(
@@ -92,11 +110,74 @@ installer_pick_internal_port 8443
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(result.stdout.strip(), "9443")
 
+    def test_udp_hysteria_does_not_block_same_tcp_port(self):
+        result = run_bash(
+            """
+installer_port_listener() { return 0; }
+installer_udp_port_listener() { printf 'UNCONN 0 0 0.0.0.0:8443 users:(("hysteria",pid=7))'; }
+installer_port_is_usable 8443
+"""
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_mixed_listeners_are_not_classified_as_our_telemt(self):
+        result = run_bash(
+            """
+installer_existing_public_port() { printf '443\\n'; }
+padding=$(printf '%0600d' 0)
+listener="LISTEN 0 4096 0.0.0.0:443 users:((\\"telemt\\",pid=7)) $padding;LISTEN 0 4096 [::]:443 users:((\\"xray\\",pid=8))"
+installer_listener_is_ours 443 "$listener"
+"""
+        )
+        self.assertNotEqual(result.returncode, 0)
+
+    def test_preflight_inventory_names_known_network_services(self):
+        result = run_bash(
+            """
+systemctl() {
+  [ "$1" = is-active ] || return 1
+  case "$3" in hysteria-server|x-ui) return 0 ;; *) return 1 ;; esac
+}
+installer_detect_network_services
+"""
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("Hysteria", result.stdout)
+        self.assertIn("3x-ui", result.stdout)
+
+    def test_existing_certificate_allows_foreign_port_80_without_claiming_it(self):
+        result = run_bash(
+            """
+installer_port_listener() { printf 'LISTEN 0 4096 0.0.0.0:80 users:(("caddy",pid=9))'; }
+log_warning() { :; }
+log_dim() { :; }
+log_error() { :; }
+log_success() { :; }
+installer_domain_http_preflight 1
+printf '%s\\n' "$INSTALLER_DOMAIN_HTTP_LISTENER"
+"""
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout.strip(), "0")
+
+    def test_new_certificate_rejects_foreign_port_80(self):
+        result = run_bash(
+            """
+installer_port_listener() { printf 'LISTEN 0 4096 0.0.0.0:80 users:(("caddy",pid=9))'; }
+log_warning() { :; }
+log_dim() { :; }
+log_error() { :; }
+log_success() { :; }
+installer_domain_http_preflight 0
+"""
+        )
+        self.assertNotEqual(result.returncode, 0)
+
     def test_reserved_local_service_ports_are_not_public_candidates(self):
         result = run_bash(
             """
 installer_port_listener() { return 0; }
-for port in 1984 9090 9091; do
+        for port in 1984 1990 9090 9091; do
   installer_port_is_usable "$port" && exit 1
 done
 true
@@ -130,6 +211,7 @@ installer_preflight_collect() {
   INSTALLER_PF_PORT443=занят
   INSTALLER_PF_RECOMMENDED_PORT=9443
   INSTALLER_PF_ADMIN=свободен
+  INSTALLER_PF_HUB=свободен
   INSTALLER_PF_METRICS=свободен
   INSTALLER_PF_API=свободен
   INSTALLER_PF_FIREWALL='не обнаружен'
@@ -144,6 +226,7 @@ installer_preflight_json
         payload = json.loads(result.stdout)
         self.assertTrue(payload["ready"])
         self.assertEqual(payload["recommended_proxy_port"], "9443")
+        self.assertEqual(payload["hub_port"], "свободен")
         self.assertEqual(payload["os"], 'Test "Linux"')
 
     def test_mode_picker_keeps_prompt_visible_and_stdout_machine_clean(self):
@@ -151,6 +234,27 @@ installer_preflight_json
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(result.stdout.strip(), "lite")
         self.assertIn("Что установить?", result.stderr)
+
+    def test_mode_zero_returns_to_previous_step(self):
+        result = run_bash("printf '0\\n' | installer_choose_mode")
+        self.assertEqual(result.returncode, 10, result.stderr)
+        install = INSTALL.read_text(encoding="utf-8")
+        ui = (ROOT / "lib" / "installer_ui.sh").read_text(encoding="utf-8")
+        self.assertIn('[ "$selection_status" -eq 10 ]', install)
+        self.assertIn('DEPLOYMENT_ROLE=""', install)
+        self.assertIn("read -r -s -n 1 answer", ui)
+        self.assertIn("Назад", ui)
+
+    def test_interactive_preflight_waits_and_zero_goes_back(self):
+        result = run_bash(
+            """
+installer_preflight_collect() { INSTALLER_PREFLIGHT_FATAL=0; }
+installer_preflight_show() { :; }
+printf '0\\n' | installer_preflight_run interactive
+"""
+        )
+        self.assertEqual(result.returncode, 10, result.stderr)
+        self.assertIn("Enter — продолжить", result.stderr)
 
     def test_operator_installation_is_russian_only(self):
         install = INSTALL.read_text(encoding="utf-8")
@@ -161,6 +265,50 @@ installer_preflight_json
         self.assertIn("--check-json", install)
         self.assertIn("--dry-run", install)
         self.assertIn("Это был предварительный просмотр: система не изменялась.", install)
+
+    def test_installer_preserves_named_users_and_cluster_role(self):
+        install = INSTALL.read_text(encoding="utf-8")
+        common = (ROOT / "lib" / "common.sh").read_text(encoding="utf-8")
+        telemt = (ROOT / "lib" / "telemt_config.sh").read_text(encoding="utf-8")
+        self.assertIn("INSTALLER_PRESERVED_USERS", install)
+        self.assertIn("replace_telemt_users_block", install)
+        self.assertIn("get_telemt_main_secret", telemt)
+        self.assertIn("deployment_role", common)
+        self.assertIn("($existing[0] // {}) + {", common)
+        self.assertIn('[ "$lazy" = "1" ] && [ -z "$INSTALLER_PRESERVED_USERS" ]', install)
+
+    def test_secrets_are_not_passed_in_process_arguments(self):
+        common = (ROOT / "lib" / "common.sh").read_text(encoding="utf-8")
+        cluster = (ROOT / "lib" / "cluster.sh").read_text(encoding="utf-8")
+        telemt = (ROOT / "lib" / "telemt_config.sh").read_text(encoding="utf-8")
+        self.assertNotIn('--arg secret "${4:-}"', common)
+        self.assertIn("--rawfile secret", common)
+        self.assertNotIn('--arg pairing_code "$pairing_code"', cluster)
+        self.assertIn("--rawfile pairing_code", cluster)
+        self.assertNotIn('awk -v users="$users_block"', telemt)
+
+    def test_cluster_finalization_is_inside_rollback_boundary(self):
+        install = INSTALL.read_text(encoding="utf-8")
+        wizard = WIZARD.read_text(encoding="utf-8")
+        self.assertIn("INSTALLER_DEFER_COMMIT=1", install)
+        self.assertIn('installer_transaction_rollback "не удалось завершить настройку роли сервера"', install)
+        self.assertIn("installer_tx_copy_if_exists /opt/igproxy-hub", wizard)
+        self.assertIn("installer_tx_service_state igproxy-node", wizard)
+
+    def test_hub_public_api_has_abuse_limits(self):
+        website = (ROOT / "lib" / "website.sh").read_text(encoding="utf-8")
+        hub = (ROOT / "cluster" / "hub_server.py").read_text(encoding="utf-8")
+        self.assertIn("limit_req zone=igproxy_hub_rate", website)
+        self.assertIn("limit_conn igproxy_hub_conn", website)
+        self.assertIn("BoundedSemaphore", hub)
+        self.assertIn("MIN_HEARTBEAT_INTERVAL", hub)
+        cluster = (ROOT / "lib" / "cluster.sh").read_text(encoding="utf-8")
+        self.assertIn("RuntimeDirectory=gotelegram", cluster)
+        self.assertIn("ReadWritePaths=/opt/gotelegram /run/gotelegram", cluster)
+
+    def test_release_contains_cluster_components(self):
+        release = (ROOT / "tools" / "build_release.py").read_text(encoding="utf-8")
+        self.assertIn('"cluster"', release)
 
     def test_pro_mode_uses_selected_public_and_internal_ports(self):
         install = INSTALL.read_text(encoding="utf-8")
@@ -207,6 +355,46 @@ installer_preflight_json
         self.assertIn("-checkend 86400", website)
         self.assertIn('-checkhost "$domain"', website)
         self.assertIn("gotelegram-certbot.XXXXXX", website)
+        self.assertIn("ssl_certificate_live_dir", website)
+        self.assertIn("ssl_certificate_matching_live_dir", website)
+        self.assertIn("igproxy_certificate_lineage_name", website)
+        self.assertIn('certbot_args+=(--cert-name "$dedicated_name")', website)
+        self.assertNotIn('--cert-name "$(basename "$matching_live_dir")"', website)
+        self.assertIn('generate_nginx_config "$domain" "$proxy_port" true "$cert_live_dir" "$enable_http_listener"', website)
+        self.assertIn('INSTALLER_DOMAIN_CERT_REUSED=1', WIZARD.read_text(encoding="utf-8"))
+        self.assertIn("INSTALLER_DOMAIN_HTTP_LISTENER=0", WIZARD.read_text(encoding="utf-8"))
+        self.assertIn("HTTP_SERVER_PLACEHOLDER", website)
+        self.assertIn("prepare_nginx_without_public_http", website)
+        self.assertIn("/etc/nginx/sites-enabled/default", WIZARD.read_text(encoding="utf-8"))
+        self.assertIn('systemctl restart nginx || {', website)
+        self.assertIn('INSTALLER_TX_CERT_NAME="${INSTALLER_DOMAIN_CERT_LINEAGE:-}"', INSTALL.read_text(encoding="utf-8"))
+        self.assertIn('installer_firewall_check_ports "$public_port" || return', INSTALL.read_text(encoding="utf-8"))
+
+    def test_new_installer_uses_only_bundled_igproxy_site_presets(self):
+        install = INSTALL.read_text(encoding="utf-8")
+        templates = (ROOT / "lib" / "templates_catalog.sh").read_text(encoding="utf-8")
+        self.assertIn("interactive_igproxy_site_preset_selection", install)
+        self.assertIn("prepare_igproxy_site_preset", install)
+        self.assertNotIn("template_dir=$(interactive_template_selection)", install[install.index("install_pro_mode()"):install.index("# ── Статус")])
+        self.assertIn("random-gallery|Рандомный сайт", templates)
+        self.assertIn("story-playground|Сад воздушных троп", templates)
+        self.assertIn("Все варианты хранятся локально", templates)
+        common = (ROOT / "lib" / "common.sh").read_text(encoding="utf-8")
+        self.assertIn("flock python3)", common)
+
+    def test_config_merge_reads_installed_at_from_slurped_object(self):
+        common = (ROOT / "lib" / "common.sh").read_text(encoding="utf-8")
+        self.assertIn("installed_at: ($existing[0].installed_at // $now)", common)
+        self.assertNotIn("installed_at: ($existing.installed_at // $now)", common)
+
+    def test_interactive_steps_clear_the_terminal(self):
+        ui = (ROOT / "lib" / "installer_ui.sh").read_text(encoding="utf-8")
+        wizard = WIZARD.read_text(encoding="utf-8")
+        install = INSTALL.read_text(encoding="utf-8")
+        self.assertIn("ig_ui_clear()", ui)
+        self.assertIn("printf '\\033[2J\\033[H'", ui)
+        self.assertIn("installer_preflight_collect\n    type ig_ui_clear", wizard)
+        self.assertGreaterEqual(install.count("ig_ui_clear"), 3)
 
     def test_russian_operator_text_does_not_expose_internal_mode_names(self):
         russian = (ROOT / "lib" / "lang" / "ru.sh").read_text(encoding="utf-8")
