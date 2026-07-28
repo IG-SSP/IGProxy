@@ -180,7 +180,7 @@ submenu_proxy() {
         echo -e "  ${CYAN}0${NC}) $(t back)"
         echo -e "  ${DIM}$(printf '─%.0s' {1..54})${NC}"
         echo -ne "  ${WHITE}$(t choose):${NC} "
-        read -r ch
+        read -r ch || return
 
         case "$ch" in
             1) menu_install ;;
@@ -196,7 +196,7 @@ submenu_proxy() {
 
         echo ""
         echo -ne "  ${DIM}$(t press_enter)${NC}"
-        read -r
+        read -r || return
     done
 }
 
@@ -215,7 +215,7 @@ submenu_manage() {
         echo -e "  ${CYAN}0${NC}) $(t back)"
         echo -e "  ${DIM}$(printf '─%.0s' {1..54})${NC}"
         echo -ne "  ${WHITE}$(t choose):${NC} "
-        read -r ch
+        read -r ch || return
 
         case "$ch" in
             1) interactive_backup ;;
@@ -230,7 +230,7 @@ submenu_manage() {
 
         echo ""
         echo -ne "  ${DIM}$(t press_enter)${NC}"
-        read -r
+        read -r || return
     done
 }
 
@@ -244,7 +244,7 @@ submenu_about() {
         echo -e "  ${CYAN}0${NC}) $(t back)"
         echo -e "  ${DIM}$(printf '─%.0s' {1..54})${NC}"
         echo -ne "  ${WHITE}$(t choose):${NC} "
-        read -r ch
+        read -r ch || return
 
         case "$ch" in
             1) menu_version ;;
@@ -254,7 +254,7 @@ submenu_about() {
 
         echo ""
         echo -ne "  ${DIM}$(t press_enter)${NC}"
-        read -r
+        read -r || return
     done
 }
 
@@ -2364,6 +2364,7 @@ main() {
         clear
         show_main_menu
         # Auto-refresh: 30 sec timeout
+        local read_status=0
         if read -t 30 -r choice; then
             case "$choice" in
                 1) submenu_proxy ;;
@@ -2380,7 +2381,15 @@ main() {
             if [ "$choice" != "2" ]; then
                 echo ""
                 echo -ne "  ${DIM}$(t press_enter_to_return)${NC}"
-                read -r
+                read -r || exit 0
+            fi
+        else
+            read_status=$?
+            # GNU bash returns 1 on EOF/closed stdin and >128 on timeout.
+            # A detached SSH/tmux menu must exit instead of spinning at 100% CPU.
+            if [ "$read_status" -lt 128 ]; then
+                tput cnorm 2>/dev/null || true
+                exit 0
             fi
         fi
         # If read timed out, loop refreshes the dashboard
@@ -2443,25 +2452,32 @@ submenu_stats() {
         tput cnorm 2>/dev/null
         echo -ne "  ${WHITE}▸ ${NC}"
 
+        local read_status=0
         if read -t 3 -r ch; then
             tput civis 2>/dev/null
             case "$ch" in
                 1)
                     if type toggle_stats &>/dev/null; then
                         toggle_stats
-                        echo -ne "  ${DIM}$(t press_enter)${NC}"; read -r
+                        echo -ne "  ${DIM}$(t press_enter)${NC}"; read -r || return
                         first_draw=1  # full redraw after action
                     fi
                     ;;
                 2)
                     if type install_stats_collector &>/dev/null; then
                         install_stats_collector
-                        echo -ne "  ${DIM}$(t press_enter)${NC}"; read -r
+                        echo -ne "  ${DIM}$(t press_enter)${NC}"; read -r || return
                         first_draw=1
                     fi
                     ;;
                 0|"") return ;;
             esac
+        else
+            read_status=$?
+            if [ "$read_status" -lt 128 ]; then
+                tput cnorm 2>/dev/null || true
+                return
+            fi
         fi
         tput civis 2>/dev/null
     done
