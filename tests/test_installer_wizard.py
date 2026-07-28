@@ -419,6 +419,13 @@ printf '0\\n' | installer_preflight_run interactive
         self.assertIn('elif [ "$(admin_web_service_status)" != "not_installed" ]; then', source)
         self.assertIn("auto_install_admin_web_if_possible", source)
 
+    def test_detached_cli_exits_on_eof_instead_of_spinning(self):
+        source = INSTALL.read_text(encoding="utf-8")
+        self.assertGreaterEqual(source.count('if [ "$read_status" -lt 128 ]; then'), 2)
+        self.assertIn("A detached SSH/tmux menu must exit", source)
+        self.assertIn("read -r ch || return", source)
+        self.assertIn("read -r || exit 0", source)
+
     def test_selinux_port_change_is_transactional(self):
         wizard = WIZARD.read_text(encoding="utf-8")
         install = INSTALL.read_text(encoding="utf-8")
