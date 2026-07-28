@@ -3,7 +3,7 @@
 # Colors, logging, spinner, system helpers, v1 compat, i18n-aware
 
 # ── Version ───────────────────────────────────────────────────────────────────
-GOTELEGRAM_VERSION="2.12.2"
+GOTELEGRAM_VERSION="2.13.0"
 GOTELEGRAM_NAME="IGProxy"
 
 # ── Пути ──────────────────────────────────────────────────────────────────────
@@ -570,24 +570,92 @@ check_disk_space() {
 # ── Конфигурация GoTelegram (JSON) ──────────────────────────────────────────
 save_gotelegram_config() {
     mkdir -p "$(dirname "$GOTELEGRAM_CONFIG")"
-    local cur_lang
+    local cur_lang deployment_role config_dir existing_file secret_file tmp lock_file
     cur_lang=$(type get_language &>/dev/null && get_language || echo en)
-    cat > "$GOTELEGRAM_CONFIG" << EOJSON
-{
-    "version": "$GOTELEGRAM_VERSION",
-    "engine": "${1:-telemt}",
-    "mode": "${2:-lite}",
-    "port": ${3:-443},
-    "secret": "${4:-}",
-    "mask_host": "${5:-google.com}",
-    "domain": "${6:-}",
-    "template_id": "${7:-}",
-    "language": "${cur_lang}",
-    "installed_at": "$(date -Iseconds)",
-    "updated_at": "$(date -Iseconds)"
-}
-EOJSON
-    chmod 600 "$GOTELEGRAM_CONFIG"
+    deployment_role="${DEPLOYMENT_ROLE:-standalone}"
+    case "$deployment_role" in
+        hub|node|controller|standalone) ;;
+        *) deployment_role="standalone" ;;
+    esac
+    config_dir=$(dirname "$GOTELEGRAM_CONFIG")
+    existing_file="$GOTELEGRAM_CONFIG"
+    secret_file=$(mktemp "$config_dir/.config-secret.XXXXXX") || return 1
+    tmp=$(mktemp "$config_dir/.config-next.XXXXXX") || {
+        rm -f -- "$secret_file"
+        return 1
+    }
+    printf '%s' "${4:-}" > "$secret_file" || {
+        rm -f -- "$secret_file" "$tmp"
+        return 1
+    }
+    chmod 600 "$secret_file" "$tmp" || {
+        rm -f -- "$secret_file" "$tmp"
+        return 1
+    }
+    if [ ! -f "$existing_file" ]; then
+        existing_file=$(mktemp "$config_dir/.config-empty.XXXXXX") || {
+            rm -f -- "$secret_file" "$tmp"
+            return 1
+        }
+        printf '{}\n' > "$existing_file"
+        chmod 600 "$existing_file"
+    fi
+    lock_file="${GOTELEGRAM_CONFIG_LOCK:-/run/gotelegram/config.lock}"
+    mkdir -p "$(dirname "$lock_file")" || {
+        rm -f -- "$secret_file" "$tmp"
+        [ "$existing_file" = "$GOTELEGRAM_CONFIG" ] || rm -f -- "$existing_file"
+        return 1
+    }
+    exec 9>"$lock_file" || {
+        rm -f -- "$secret_file" "$tmp"
+        [ "$existing_file" = "$GOTELEGRAM_CONFIG" ] || rm -f -- "$existing_file"
+        return 1
+    }
+    flock 9 || {
+        exec 9>&-
+        rm -f -- "$secret_file" "$tmp"
+        [ "$existing_file" = "$GOTELEGRAM_CONFIG" ] || rm -f -- "$existing_file"
+        return 1
+    }
+    jq -n \
+        --slurpfile existing "$existing_file" \
+        --rawfile secret "$secret_file" \
+        --arg version "$GOTELEGRAM_VERSION" \
+        --arg engine "${1:-telemt}" \
+        --arg mode "${2:-lite}" \
+        --arg role "$deployment_role" \
+        --argjson port "${3:-443}" \
+        --arg mask_host "${5:-google.com}" \
+        --arg domain "${6:-}" \
+        --arg template_id "${7:-}" \
+        --arg language "$cur_lang" \
+        --arg now "$(date -Iseconds)" \
+        '($existing[0] // {}) + {
+            version: $version,
+            engine: $engine,
+            mode: $mode,
+            deployment_role: $role,
+            port: $port,
+            secret: $secret,
+            mask_host: $mask_host,
+            domain: $domain,
+            template_id: $template_id,
+            language: $language,
+            installed_at: ($existing.installed_at // $now),
+            updated_at: $now
+        }' > "$tmp" || {
+            exec 9>&-
+            rm -f -- "$secret_file" "$tmp"
+            [ "$existing_file" = "$GOTELEGRAM_CONFIG" ] || rm -f -- "$existing_file"
+            return 1
+        }
+    chmod 600 "$tmp" &&
+        mv "$tmp" "$GOTELEGRAM_CONFIG"
+    local write_status=$?
+    exec 9>&-
+    rm -f -- "$secret_file"
+    [ "$existing_file" = "$GOTELEGRAM_CONFIG" ] || rm -f -- "$existing_file"
+    [ "$write_status" -eq 0 ]
 }
 
 load_gotelegram_config() {

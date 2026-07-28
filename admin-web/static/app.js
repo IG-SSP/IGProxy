@@ -1152,9 +1152,16 @@ function renderOverview() {
   const activeIps = state.users.reduce((sum, user) => sum + (Number(user.traffic?.active_unique_ips) || 0), 0);
   $("#portPublicAddress").textContent = `${cfg.domain || cfg.mask_host || "сервер"}:${cfg.port || 443}`;
   $("#portCurrentRate").textContent = `${fmtBytes(currentRate)}/с`;
-  $("#portNetworkDc").textContent = state.health?.dc?.available
-    ? `${state.health.dc.reachable || 0}/${state.health.dc.total || 0}`
-    : (cfg.network_dc_count || 1);
+  const clusterNodes = Array.isArray(cfg.cluster_nodes) ? cfg.cluster_nodes : [];
+  const clusterOnline = 1 + clusterNodes.filter((node) => (
+    node?.approved !== false
+    && ((Date.now() / 1000) - (Number(node?.last_seen) || 0)) <= 180
+  )).length;
+  $("#portNetworkDc").textContent = clusterNodes.length
+    ? `${clusterOnline}/${1 + clusterNodes.length}`
+    : (state.health?.dc?.available
+      ? `${state.health.dc.reachable || 0}/${state.health.dc.total || 0}`
+      : (cfg.network_dc_count || 1));
   $("#portConnections").textContent = liveConnections;
   $("#portActiveIps").textContent = activeIps;
   if (!state.generalSettingsDirty) $("#networkDcCount").value = cfg.network_dc_count || 1;

@@ -99,6 +99,8 @@ server {
     root /var/www/gotelegram-site;
     index index.html;
 
+HUB_LOCATION_PLACEHOLDER
+
     location / {
         try_files $uri $uri/ =404;
         expires 30d;
@@ -116,6 +118,45 @@ server {
     location = /favicon.ico { log_not_found off; access_log off; }
 }
 EONGINX
+
+    local hub_location=""
+    local hub_limits_conf="/etc/nginx/conf.d/igproxy-hub-limits.conf"
+    case "${DEPLOYMENT_ROLE:-standalone}" in
+        hub|controller)
+            mkdir -p "$(dirname "$hub_limits_conf")"
+            cat > "$hub_limits_conf" << 'EOHUBLIMITS'
+# IGProxy Hub public API abuse protection.
+limit_req_zone $binary_remote_addr zone=igproxy_hub_rate:10m rate=5r/s;
+limit_conn_zone $binary_remote_addr zone=igproxy_hub_conn:10m;
+EOHUBLIMITS
+            hub_location='    # API регистрации узлов; сам процесс слушает только loopback.
+    location /__igproxy/ {
+        limit_req zone=igproxy_hub_rate burst=10 nodelay;
+        limit_conn igproxy_hub_conn 10;
+        proxy_pass http://127.0.0.1:1990/;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-Proto https;
+        proxy_connect_timeout 5s;
+        proxy_read_timeout 15s;
+        client_body_timeout 10s;
+        client_max_body_size 64k;
+        limit_except GET POST { deny all; }
+    }'
+            ;;
+        *)
+            if [ -f "$hub_limits_conf" ] &&
+               grep -q '^# IGProxy Hub public API abuse protection\.$' "$hub_limits_conf"; then
+                rm -f -- "$hub_limits_conf"
+            fi
+            ;;
+    esac
+    awk -v replacement="$hub_location" '
+        $0 == "HUB_LOCATION_PLACEHOLDER" { print replacement; next }
+        { print }
+    ' "$NGINX_SITE_CONF" > "${NGINX_SITE_CONF}.tmp" &&
+        mv "${NGINX_SITE_CONF}.tmp" "$NGINX_SITE_CONF"
 
     # Подставляем значения (используем | как разделитель, чтобы / в домене не ломал sed)
     local escaped_domain

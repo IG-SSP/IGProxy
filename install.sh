@@ -11,6 +11,10 @@ set -uo pipefail
 MIGRATED_FROM="${MIGRATED_FROM:-}"   # init для set -u (выставляется в миграции)
 REANIM_PRESET_CHANGED=0   # оффер при апгрейде сменил пресет -> форсить регенерацию конфига
 TELEMT_VERSION_PREF="${TELEMT_VERSION_PREF:-}"   # выбор версии ядра на время установки
+DEPLOYMENT_ROLE="${DEPLOYMENT_ROLE:-}"   # hub | node | controller | standalone
+INSTALLER_PRESERVED_USERS="${INSTALLER_PRESERVED_USERS:-}"
+INSTALLER_APPLY_COMPLETED=0
+INSTALLER_DEFER_COMMIT=0
 
 # Script path and libraries
 SCRIPT_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
@@ -26,6 +30,7 @@ fi
 # Load libraries
 source "$LIB_DIR/common.sh"
 source "$LIB_DIR/i18n.sh"
+[ -f "$LIB_DIR/installer_ui.sh" ] && source "$LIB_DIR/installer_ui.sh"
 source "$LIB_DIR/telemt.sh"
 source "$LIB_DIR/telemt_config.sh"
 source "$LIB_DIR/website.sh"
@@ -39,6 +44,7 @@ source "$LIB_DIR/installer_wizard.sh"
 [ -f "$LIB_DIR/stats.sh" ] && source "$LIB_DIR/stats.sh"
 [ -f "$LIB_DIR/shared443.sh" ] && source "$LIB_DIR/shared443.sh"
 [ -f "$LIB_DIR/diagnose.sh" ] && source "$LIB_DIR/diagnose.sh"
+[ -f "$LIB_DIR/cluster.sh" ] && source "$LIB_DIR/cluster.sh"
 
 # Операторский интерфейс goTelegram Clean — только русский.
 load_language "ru"
@@ -204,7 +210,8 @@ submenu_manage() {
         echo -e "  ${CYAN}2${NC}) $(t manage_restore)"
         echo -e "  ${CYAN}3${NC}) $(t manage_update_telemt)"
         echo -e "  ${CYAN}4${NC}) $(t manage_site_ssl)"
-        echo -e "  ${CYAN}5${NC}) $(t manage_remove)"
+        echo -e "  ${CYAN}5${NC}) Сеть серверов"
+        echo -e "  ${CYAN}6${NC}) $(t manage_remove)"
         echo -e "  ${CYAN}0${NC}) $(t back)"
         echo -e "  ${DIM}$(printf '─%.0s' {1..54})${NC}"
         echo -ne "  ${WHITE}$(t choose):${NC} "
@@ -215,7 +222,8 @@ submenu_manage() {
             2) interactive_restore ;;
             3) telemt_version_change ;;
             4) menu_website ;;
-            5) menu_remove ;;
+            5) if type menu_cluster >/dev/null 2>&1; then menu_cluster; else log_error "Модуль сети не установлен"; fi ;;
+            6) menu_remove ;;
             0) break ;;
             *) log_error "$(t invalid_choice)" ;;
         esac
@@ -730,7 +738,26 @@ show_upgrade_changelog() {
 }
 
 menu_install() {
+    local selected_role existing_role selected_mode=""
+    INSTALLER_APPLY_COMPLETED=0
+    INSTALLER_DEFER_COMMIT=1
+    existing_role=$(config_get deployment_role 2>/dev/null || true)
+    if [ -n "$existing_role" ] && type cluster_valid_role >/dev/null 2>&1 &&
+       cluster_valid_role "$existing_role"; then
+        DEPLOYMENT_ROLE="$existing_role"
+        if type ig_ui_logo >/dev/null 2>&1; then
+            ig_ui_logo "Безопасное обновление"
+            ig_ui_status ok "Найдена существующая установка" \
+                "$(installer_role_title "$existing_role") · ключи будут сохранены"
+        fi
+    else
+        DEPLOYMENT_ROLE=$(installer_choose_deployment_role) || return
+    fi
+    export DEPLOYMENT_ROLE
+
     if type installer_preflight_run >/dev/null 2>&1; then
+        type ig_ui_stepper >/dev/null 2>&1 &&
+            ig_ui_stepper 2 "Роль" "Проверка" "Публикация" "Установка"
         installer_preflight_run || return
     fi
 
@@ -746,7 +773,6 @@ menu_install() {
         migrate_v1_to_v2 || return
     fi
 
-    local selected_mode=""
     if type installer_choose_mode >/dev/null 2>&1; then
         selected_mode=$(installer_choose_mode) || return
     else
@@ -757,6 +783,28 @@ menu_install() {
         lite) install_lite_mode ;;
         *) log_error "Неизвестный сценарий установки: $selected_mode" ;;
     esac
+    [ "$INSTALLER_APPLY_COMPLETED" = "1" ] || return
+
+    if type cluster_finalize_deployment_role >/dev/null 2>&1; then
+        cluster_finalize_deployment_role "$DEPLOYMENT_ROLE" || {
+            log_error "Прокси установлен, но подключение роли «$(installer_role_title "$DEPLOYMENT_ROLE")» не завершено."
+            installer_transaction_rollback "не удалось завершить настройку роли сервера"
+            return 1
+        }
+    fi
+    installer_transaction_commit
+    INSTALLER_DEFER_COMMIT=0
+    if [ "$DEPLOYMENT_ROLE" = "hub" ]; then
+        install_admin_web || log_warning "Web-админка не установилась; её можно восстановить из меню."
+        if [ "$(bot_service_status)" = "not_installed" ]; then
+            echo ""
+            if confirm "Настроить единый Telegram-бот сейчас?"; then
+                bot_install || log_warning "Бот не установлен; повторите настройку из главного меню."
+            fi
+        fi
+    fi
+    type ig_ui_success >/dev/null 2>&1 &&
+        ig_ui_success "IGProxy готов" "$(installer_role_title "$DEPLOYMENT_ROLE")"
 }
 
 # ── Lite mode ───────────────────────────────────────────────────────────────
@@ -802,7 +850,13 @@ install_lite_mode() {
 
     # Generate secret
     local secret
-    secret=$(generate_hex 32)
+    INSTALLER_PRESERVED_USERS=$(get_telemt_users_block "$TELEMT_CONFIG" 2>/dev/null || true)
+    secret=$(get_telemt_main_secret "$TELEMT_CONFIG" 2>/dev/null || true)
+    [ -n "$secret" ] || secret=$(generate_hex 32)
+    if [ -n "$INSTALLER_PRESERVED_USERS" ] &&
+       ! telemt_users_block_has_main "$INSTALLER_PRESERVED_USERS"; then
+        INSTALLER_PRESERVED_USERS=$(printf 'main = "%s"\n%s\n' "$secret" "$INSTALLER_PRESERVED_USERS")
+    fi
 
     # Confirm
     local ip
@@ -838,6 +892,11 @@ install_lite_mode() {
         installer_transaction_rollback "не удалось сформировать конфиг telemt"
         return
     }
+    if [ -n "$INSTALLER_PRESERVED_USERS" ] &&
+       ! replace_telemt_users_block "$INSTALLER_PRESERVED_USERS" "$TELEMT_CONFIG"; then
+        installer_transaction_rollback "не удалось восстановить существующие ключи"
+        return
+    fi
 
     # Validate
     validate_telemt_config || {
@@ -860,7 +919,7 @@ install_lite_mode() {
         installer_transaction_rollback "финальная проверка прокси не пройдена"
         return
     }
-    installer_transaction_commit
+    [ "$INSTALLER_DEFER_COMMIT" = "1" ] || installer_transaction_commit
 
     # Credits
     show_credits
@@ -868,6 +927,7 @@ install_lite_mode() {
     # Result
     show_proxy_info
     log_success "$(tf install_done "$GOTELEGRAM_VERSION" "Только прокси")"
+    INSTALLER_APPLY_COMPLETED=1
 
     log_dim "Сетевые sysctl, journald и firewall не изменялись. Оптимизацию можно запустить отдельно после проверки прокси."
 }
@@ -945,7 +1005,14 @@ install_pro_mode() {
     echo -e "  ${DIM}$(tf install_arch_desc3 "$user_domain" "$public_port")${NC}"
 
     # Fake-TLS секрет (ee + secret + hex домена)
-    local raw_secret; raw_secret=$(generate_hex 32)
+    local raw_secret
+    INSTALLER_PRESERVED_USERS=$(get_telemt_users_block "$TELEMT_CONFIG" 2>/dev/null || true)
+    raw_secret=$(get_telemt_main_secret "$TELEMT_CONFIG" 2>/dev/null || true)
+    [ -n "$raw_secret" ] || raw_secret=$(generate_hex 32)
+    if [ -n "$INSTALLER_PRESERVED_USERS" ] &&
+       ! telemt_users_block_has_main "$INSTALLER_PRESERVED_USERS"; then
+        INSTALLER_PRESERVED_USERS=$(printf 'main = "%s"\n%s\n' "$raw_secret" "$INSTALLER_PRESERVED_USERS")
+    fi
     local domain_hex; domain_hex=$(printf '%s' "$user_domain" | xxd -p | tr -d '\n')
     local faketls_secret="ee${raw_secret}${domain_hex}"
 
@@ -986,9 +1053,14 @@ install_pro_mode() {
         installer_transaction_rollback "не удалось сформировать конфиг telemt"
         return
     }
+    if [ -n "$INSTALLER_PRESERVED_USERS" ] &&
+       ! replace_telemt_users_block "$INSTALLER_PRESERVED_USERS" "$TELEMT_CONFIG"; then
+        installer_transaction_rollback "не удалось восстановить существующие ключи"
+        return
+    fi
 
     # Ленивый: 5 ключей (main + key2..key5). Charset имён [A-Za-z0-9_.-] — безопасно.
-    if [ "$lazy" = "1" ]; then
+    if [ "$lazy" = "1" ] && [ -z "$INSTALLER_PRESERVED_USERS" ]; then
         local ub="main = \"$raw_secret\"" i
         for i in 2 3 4 5; do
             ub="${ub}
@@ -1017,11 +1089,12 @@ key${i} = \"$(generate_hex 32)\""
         installer_transaction_rollback "финальная проверка прокси и сайта не пройдена"
         return
     }
-    installer_transaction_commit
+    [ "$INSTALLER_DEFER_COMMIT" = "1" ] || installer_transaction_commit
 
     show_proxy_info_pro "$user_domain" "$faketls_secret" "$public_port" "$nginx_internal_port"
     echo -e "  ${WHITE}$(t svc_site):${NC} ${GREEN}$(format_https_url "$user_domain" "$public_port")${NC}"
     log_success "$(tf install_done "$GOTELEGRAM_VERSION" "Свой домен и сайт")"
+    INSTALLER_APPLY_COMPLETED=1
 
     log_dim "Сетевые sysctl, journald и firewall не изменялись. Оптимизацию можно запустить отдельно после проверки прокси."
 }

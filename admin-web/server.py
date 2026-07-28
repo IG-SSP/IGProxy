@@ -53,6 +53,7 @@ INSTALL_DIR = Path(os.getenv("GOTELEGRAM_DIR", "/opt/gotelegram"))
 BOT_DIR = Path(os.getenv("GOTELEGRAM_BOT_DIR", "/opt/gotelegram-bot"))
 DISABLED_USERS_FILE = Path(os.getenv("GOTELEGRAM_DISABLED_USERS", "/opt/gotelegram/disabled_users.json"))
 USER_LOCK_FILE = Path(os.getenv("GOTELEGRAM_USER_LOCK", "/run/gotelegram/admin-users.lock"))
+CONFIG_LOCK_FILE = Path(os.getenv("GOTELEGRAM_CONFIG_LOCK", "/run/gotelegram/config.lock"))
 SHARED_443_CONFIG = Path(os.getenv("GOTELEGRAM_SHARED_443", "/opt/gotelegram/shared-443.json"))
 BACKUP_SCHEDULE_FILE = Path(os.getenv("GOTELEGRAM_BACKUP_SCHEDULE", "/opt/gotelegram/backup_schedule.json"))
 BACKUP_RESTORE_LOG = Path(os.getenv("GOTELEGRAM_BACKUP_RESTORE_LOG", "/var/log/gotelegram-restore.log"))
@@ -60,7 +61,7 @@ WEBSITE_ROOT = Path(os.getenv("GOTELEGRAM_WEBSITE_ROOT", "/var/www/gotelegram-si
 SITE_PRESETS_DIR = Path(os.getenv("GOTELEGRAM_SITE_PRESETS", "/opt/gotelegram/current/site-presets"))
 HOST = os.getenv("GOTELEGRAM_ADMIN_HOST", "127.0.0.1")
 PORT = int(os.getenv("GOTELEGRAM_ADMIN_PORT", "1984"))
-VERSION = "2.12.2"  # fallback only; live value read from config.json
+VERSION = "2.13.0"  # fallback only; live value read from config.json
 RUNTIME_COMMON_PATHS = (
     INSTALL_DIR / "current" / "lib" / "common.sh",
     Path(__file__).resolve().parents[1] / "lib" / "common.sh",
@@ -288,6 +289,7 @@ def client_servers_payload(config: dict[str, Any] | None = None) -> list[dict[st
                 "label": label,
                 "url": url,
                 "enabled": bool(item.get("enabled", True)),
+                "managed": bool(item.get("managed", False)),
             })
     return result
 
@@ -316,10 +318,16 @@ def save_client_servers(raw: Any) -> list[dict[str, Any]]:
             "url": url,
             "enabled": bool(item.get("enabled", True)),
         })
-    config = load_json(GOTELEGRAM_CONFIG, {}) or {}
-    config["client_servers"] = servers
-    config["updated_at"] = utc_now()
-    save_json(GOTELEGRAM_CONFIG, config)
+    with FileLock(CONFIG_LOCK_FILE):
+        config = load_json(GOTELEGRAM_CONFIG, {}) or {}
+        managed = [
+            item for item in (config.get("client_servers") or [])
+            if isinstance(item, dict) and bool(item.get("managed", False))
+        ]
+        servers = [item for item in servers if not bool(item.get("managed", False))] + managed
+        config["client_servers"] = servers
+        config["updated_at"] = utc_now()
+        save_json(GOTELEGRAM_CONFIG, config)
     return servers
 
 
@@ -462,12 +470,13 @@ def _publish_site_stage(stage: Path, preset: str, key_name: str) -> dict[str, An
     if WEBSITE_ROOT.exists():
         WEBSITE_ROOT.replace(previous)
     stage.replace(WEBSITE_ROOT)
-    config = load_json(GOTELEGRAM_CONFIG, {}) or {}
-    config["site_preset"] = preset
-    config["site_key"] = key_name
-    config["template_id"] = f"igproxy-{preset}"
-    config["updated_at"] = utc_now()
-    save_json(GOTELEGRAM_CONFIG, config)
+    with FileLock(CONFIG_LOCK_FILE):
+        config = load_json(GOTELEGRAM_CONFIG, {}) or {}
+        config["site_preset"] = preset
+        config["site_key"] = key_name
+        config["template_id"] = f"igproxy-{preset}"
+        config["updated_at"] = utc_now()
+        save_json(GOTELEGRAM_CONFIG, config)
     return site_settings_payload()
 
 
@@ -537,12 +546,13 @@ def write_language(lang: str) -> dict[str, Any]:
     lang = str(lang or "").strip().lower()
     if not LANG_RE.match(lang):
         raise ValueError("unsupported language")
-    config = load_json(GOTELEGRAM_CONFIG, {}) or {}
-    if not isinstance(config, dict):
-        config = {}
-    config["language"] = lang
-    config["updated_at"] = utc_now()
-    save_json(GOTELEGRAM_CONFIG, config)
+    with FileLock(CONFIG_LOCK_FILE):
+        config = load_json(GOTELEGRAM_CONFIG, {}) or {}
+        if not isinstance(config, dict):
+            config = {}
+        config["language"] = lang
+        config["updated_at"] = utc_now()
+        save_json(GOTELEGRAM_CONFIG, config)
     INSTALL_DIR.mkdir(parents=True, exist_ok=True)
     (INSTALL_DIR / ".language").write_text(lang + "\n", encoding="utf-8")
     bot_env = BOT_DIR / ".env"
@@ -1345,7 +1355,7 @@ def health_payload(force: bool = False) -> dict[str, Any]:
             issues.append({
                 "level": "warn",
                 "title": f"Установлен telemt {version}",
-                "detail": "Для IGProxy 2.12.2 проверена версия 3.4.25.",
+                "detail": "Для IGProxy 2.13.0 проверена версия 3.4.25.",
                 "action": "Обновите ядро с резервной копией бинарника и конфига.",
             })
         if handshake_mss and not bulk_mss:
@@ -2345,8 +2355,6 @@ class AdminHandler(BaseHTTPRequestHandler):
                 network_dc_count = int(body.get("network_dc_count") or 1)
                 if network_dc_count < 1 or network_dc_count > 999:
                     raise ValueError("network_dc_count must be between 1 and 999")
-                config = load_json(GOTELEGRAM_CONFIG, {}) or {}
-                config["network_dc_count"] = network_dc_count
                 brand_name = str(body.get("brand_name") or "IGProxy").strip()
                 if len(brand_name) > 48:
                     raise ValueError("название должно быть не длиннее 48 символов")
@@ -2360,13 +2368,16 @@ class AdminHandler(BaseHTTPRequestHandler):
                 sponsor_enabled = bool(body.get("sponsor_enabled", False))
                 if sponsor_enabled and not sponsor_url:
                     raise ValueError("для включения спонсора укажите ссылку на канал")
-                config["brand_enabled"] = bool(body.get("brand_enabled", True))
-                config["brand_name"] = brand_name or "IGProxy"
-                config["sponsor_enabled"] = sponsor_enabled
-                config["sponsor_name"] = sponsor_name or "Спонсорский канал"
-                config["sponsor_url"] = sponsor_url
-                config["updated_at"] = utc_now()
-                save_json(GOTELEGRAM_CONFIG, config)
+                with FileLock(CONFIG_LOCK_FILE):
+                    config = load_json(GOTELEGRAM_CONFIG, {}) or {}
+                    config["network_dc_count"] = network_dc_count
+                    config["brand_enabled"] = bool(body.get("brand_enabled", True))
+                    config["brand_name"] = brand_name or "IGProxy"
+                    config["sponsor_enabled"] = sponsor_enabled
+                    config["sponsor_name"] = sponsor_name or "Спонсорский канал"
+                    config["sponsor_url"] = sponsor_url
+                    config["updated_at"] = utc_now()
+                    save_json(GOTELEGRAM_CONFIG, config)
             except (TypeError, ValueError) as exc:
                 self.send_error_json(400, str(exc))
                 return

@@ -99,7 +99,7 @@ installer_pick_internal_port 8443
         result = run_bash(
             """
 installer_port_listener() { return 0; }
-for port in 1984 9090 9091; do
+        for port in 1984 1990 9090 9091; do
   installer_port_is_usable "$port" && exit 1
 done
 true
@@ -133,6 +133,7 @@ installer_preflight_collect() {
   INSTALLER_PF_PORT443=занят
   INSTALLER_PF_RECOMMENDED_PORT=9443
   INSTALLER_PF_ADMIN=свободен
+  INSTALLER_PF_HUB=свободен
   INSTALLER_PF_METRICS=свободен
   INSTALLER_PF_API=свободен
   INSTALLER_PF_FIREWALL='не обнаружен'
@@ -147,6 +148,7 @@ installer_preflight_json
         payload = json.loads(result.stdout)
         self.assertTrue(payload["ready"])
         self.assertEqual(payload["recommended_proxy_port"], "9443")
+        self.assertEqual(payload["hub_port"], "свободен")
         self.assertEqual(payload["os"], 'Test "Linux"')
 
     def test_mode_picker_keeps_prompt_visible_and_stdout_machine_clean(self):
@@ -164,6 +166,50 @@ installer_preflight_json
         self.assertIn("--check-json", install)
         self.assertIn("--dry-run", install)
         self.assertIn("Это был предварительный просмотр: система не изменялась.", install)
+
+    def test_installer_preserves_named_users_and_cluster_role(self):
+        install = INSTALL.read_text(encoding="utf-8")
+        common = (ROOT / "lib" / "common.sh").read_text(encoding="utf-8")
+        telemt = (ROOT / "lib" / "telemt_config.sh").read_text(encoding="utf-8")
+        self.assertIn("INSTALLER_PRESERVED_USERS", install)
+        self.assertIn("replace_telemt_users_block", install)
+        self.assertIn("get_telemt_main_secret", telemt)
+        self.assertIn("deployment_role", common)
+        self.assertIn("($existing[0] // {}) + {", common)
+        self.assertIn('[ "$lazy" = "1" ] && [ -z "$INSTALLER_PRESERVED_USERS" ]', install)
+
+    def test_secrets_are_not_passed_in_process_arguments(self):
+        common = (ROOT / "lib" / "common.sh").read_text(encoding="utf-8")
+        cluster = (ROOT / "lib" / "cluster.sh").read_text(encoding="utf-8")
+        telemt = (ROOT / "lib" / "telemt_config.sh").read_text(encoding="utf-8")
+        self.assertNotIn('--arg secret "${4:-}"', common)
+        self.assertIn("--rawfile secret", common)
+        self.assertNotIn('--arg pairing_code "$pairing_code"', cluster)
+        self.assertIn("--rawfile pairing_code", cluster)
+        self.assertNotIn('awk -v users="$users_block"', telemt)
+
+    def test_cluster_finalization_is_inside_rollback_boundary(self):
+        install = INSTALL.read_text(encoding="utf-8")
+        wizard = WIZARD.read_text(encoding="utf-8")
+        self.assertIn("INSTALLER_DEFER_COMMIT=1", install)
+        self.assertIn('installer_transaction_rollback "не удалось завершить настройку роли сервера"', install)
+        self.assertIn("installer_tx_copy_if_exists /opt/igproxy-hub", wizard)
+        self.assertIn("installer_tx_service_state igproxy-node", wizard)
+
+    def test_hub_public_api_has_abuse_limits(self):
+        website = (ROOT / "lib" / "website.sh").read_text(encoding="utf-8")
+        hub = (ROOT / "cluster" / "hub_server.py").read_text(encoding="utf-8")
+        self.assertIn("limit_req zone=igproxy_hub_rate", website)
+        self.assertIn("limit_conn igproxy_hub_conn", website)
+        self.assertIn("BoundedSemaphore", hub)
+        self.assertIn("MIN_HEARTBEAT_INTERVAL", hub)
+        cluster = (ROOT / "lib" / "cluster.sh").read_text(encoding="utf-8")
+        self.assertIn("RuntimeDirectory=gotelegram", cluster)
+        self.assertIn("ReadWritePaths=/opt/gotelegram /run/gotelegram", cluster)
+
+    def test_release_contains_cluster_components(self):
+        release = (ROOT / "tools" / "build_release.py").read_text(encoding="utf-8")
+        self.assertIn('"cluster"', release)
 
     def test_pro_mode_uses_selected_public_and_internal_ports(self):
         install = INSTALL.read_text(encoding="utf-8")

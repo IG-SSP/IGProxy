@@ -6,6 +6,7 @@ INSTALLER_PORT_CANDIDATES="${INSTALLER_PORT_CANDIDATES:-8443 9443 2053}"
 INSTALLER_SELECTED_PORT="${INSTALLER_SELECTED_PORT:-}"
 INSTALLER_INTERNAL_PORT="${INSTALLER_INTERNAL_PORT:-}"
 INSTALLER_PREFLIGHT_FATAL=0
+INSTALLER_PF_HUB="${INSTALLER_PF_HUB:-}"
 
 installer_trim_line() {
     printf '%s' "${1:-}" | tr '\n\r\t' '   ' | sed -E 's/[[:space:]]+/ /g; s/^ //; s/ $//' | cut -c1-120
@@ -48,7 +49,7 @@ installer_port_is_usable() {
     [[ "$port" =~ ^[0-9]+$ ]] || return 1
     [ "$port" -ge 1 ] && [ "$port" -le 65535 ] || return 1
     case "$port" in
-        1984|9090|9091) return 1 ;;
+        1984|1990|9090|9091) return 1 ;;
     esac
     listener=$(installer_port_listener "$port")
     [ -z "$listener" ] && return 0
@@ -304,6 +305,13 @@ installer_preflight_collect() {
     INSTALLER_PF_FIREWALL=$(installer_firewall_label)
     INSTALLER_PF_SELINUX=$(installer_selinux_label)
     INSTALLER_PF_ADMIN=$(installer_reserved_port_status 1984 gotelegram-admin) || INSTALLER_PREFLIGHT_FATAL=$((INSTALLER_PREFLIGHT_FATAL + 1))
+    if [ "${DEPLOYMENT_ROLE:-standalone}" = "hub" ] ||
+       [ "${DEPLOYMENT_ROLE:-standalone}" = "controller" ]; then
+        INSTALLER_PF_HUB=$(installer_reserved_port_status 1990 igproxy-hub) ||
+            INSTALLER_PREFLIGHT_FATAL=$((INSTALLER_PREFLIGHT_FATAL + 1))
+    else
+        INSTALLER_PF_HUB="не используется этой ролью"
+    fi
     INSTALLER_PF_METRICS=$(installer_reserved_port_status 9090 telemt) || INSTALLER_PREFLIGHT_FATAL=$((INSTALLER_PREFLIGHT_FATAL + 1))
     INSTALLER_PF_API=$(installer_reserved_port_status 9091 telemt) || INSTALLER_PREFLIGHT_FATAL=$((INSTALLER_PREFLIGHT_FATAL + 1))
     INSTALLER_PF_EXISTING="нет"
@@ -335,6 +343,40 @@ installer_status_line() {
 }
 
 installer_preflight_show() {
+    if type ig_ui_heading >/dev/null 2>&1; then
+        ig_ui_heading "ШАГ 2 · ПРОВЕРКА" "Готовность сервера" \
+            "Мастер пока ничего не меняет — только читает состояние системы."
+        ig_ui_status ok "Система" "$INSTALLER_PF_OS · $INSTALLER_PF_ARCH"
+        if [ "${INSTALLER_PF_MEMORY_MB:-0}" -lt 256 ] 2>/dev/null; then
+            ig_ui_status warn "Память" "${INSTALLER_PF_MEMORY_MB} MB · желательно от 256 MB"
+        else
+            ig_ui_status ok "Память" "${INSTALLER_PF_MEMORY_MB} MB"
+        fi
+        if [ "${INSTALLER_PF_DISK_MB:-0}" -lt 500 ] 2>/dev/null; then
+            ig_ui_status error "Свободное место" "${INSTALLER_PF_DISK_MB} MB · нужно минимум 500 MB"
+        else
+            ig_ui_status ok "Свободное место" "${INSTALLER_PF_DISK_MB} MB"
+        fi
+        [ -n "$INSTALLER_PF_IP" ] && [ "$INSTALLER_PF_IP" != "0.0.0.0" ] &&
+            ig_ui_status ok "Публичный IPv4" "$INSTALLER_PF_IP" ||
+            ig_ui_status warn "Публичный IPv4" "не удалось определить"
+        installer_port_is_usable 443 &&
+            ig_ui_status ok "Публичный TCP/443" "$INSTALLER_PF_PORT443" ||
+            ig_ui_status warn "Публичный TCP/443" "$INSTALLER_PF_PORT443"
+        [ -n "$INSTALLER_PF_RECOMMENDED_PORT" ] &&
+            ig_ui_status ok "Порт для прокси" "$INSTALLER_PF_RECOMMENDED_PORT" ||
+            ig_ui_status error "Порт для прокси" "нет свободного кандидата"
+        case "$INSTALLER_PF_ADMIN" in
+            КОНФЛИКТ*) ig_ui_status error "Локальная админка" "127.0.0.1:1984 · $INSTALLER_PF_ADMIN" ;;
+            *) ig_ui_status ok "Локальная админка" "127.0.0.1:1984 · $INSTALLER_PF_ADMIN" ;;
+        esac
+        case "$INSTALLER_PF_HUB" in
+            КОНФЛИКТ*) ig_ui_status error "Единый центр" "127.0.0.1:1990 · $INSTALLER_PF_HUB" ;;
+            *) ig_ui_status ok "Единый центр" "127.0.0.1:1990 · $INSTALLER_PF_HUB" ;;
+        esac
+        ig_ui_note "Firewall: $INSTALLER_PF_FIREWALL · SELinux: $INSTALLER_PF_SELINUX"
+        return
+    fi
     echo ""
     echo -e "  ${BOLD:-}Проверка сервера перед установкой${NC:-}"
     echo -e "  ${DIM:-}$(printf '─%.0s' {1..64})${NC:-}"
@@ -376,6 +418,7 @@ installer_preflight_show() {
         *) installer_status_line ok "SELinux" "$INSTALLER_PF_SELINUX" ;;
     esac
     case "$INSTALLER_PF_ADMIN" in КОНФЛИКТ*) installer_status_line error "Админка 127.0.0.1:1984" "$INSTALLER_PF_ADMIN" ;; *) installer_status_line ok "Админка 127.0.0.1:1984" "$INSTALLER_PF_ADMIN" ;; esac
+    case "$INSTALLER_PF_HUB" in КОНФЛИКТ*) installer_status_line error "Центр 127.0.0.1:1990" "$INSTALLER_PF_HUB" ;; *) installer_status_line ok "Центр 127.0.0.1:1990" "$INSTALLER_PF_HUB" ;; esac
     case "$INSTALLER_PF_METRICS" in КОНФЛИКТ*) installer_status_line error "Метрики 127.0.0.1:9090" "$INSTALLER_PF_METRICS" ;; *) installer_status_line ok "Метрики 127.0.0.1:9090" "$INSTALLER_PF_METRICS" ;; esac
     case "$INSTALLER_PF_API" in КОНФЛИКТ*) installer_status_line error "API 127.0.0.1:9091" "$INSTALLER_PF_API" ;; *) installer_status_line ok "API 127.0.0.1:9091" "$INSTALLER_PF_API" ;; esac
     installer_status_line ok "Существующая установка" "$INSTALLER_PF_EXISTING"
@@ -413,6 +456,7 @@ installer_preflight_json() {
     printf '"port_443":"%s",' "$(installer_json_escape "$INSTALLER_PF_PORT443")"
     printf '"recommended_proxy_port":"%s",' "$(installer_json_escape "$INSTALLER_PF_RECOMMENDED_PORT")"
     printf '"admin_port":"%s",' "$(installer_json_escape "$INSTALLER_PF_ADMIN")"
+    printf '"hub_port":"%s",' "$(installer_json_escape "$INSTALLER_PF_HUB")"
     printf '"metrics_port":"%s",' "$(installer_json_escape "$INSTALLER_PF_METRICS")"
     printf '"api_port":"%s",' "$(installer_json_escape "$INSTALLER_PF_API")"
     printf '"firewall":"%s",' "$(installer_json_escape "$INSTALLER_PF_FIREWALL")"
@@ -430,6 +474,34 @@ installer_choose_public_port() {
         return 1
     }
     while true; do
+        if type ig_ui_select >/dev/null 2>&1; then
+            choice=$(ig_ui_select "Порт прокси" 1 \
+                "recommended|TCP/${recommended}|Свободен и подходит текущей конфигурации.|Рекомендуется" \
+                "custom|Другой порт|Укажите собственный TCP-порт от 1 до 65535.|Расширенный режим") || return 1
+            case "$choice" in
+                recommended)
+                    INSTALLER_SELECTED_PORT="$recommended"
+                    printf '%s\n' "$recommended"
+                    return 0
+                    ;;
+                custom)
+                    printf '\n  %s%s%s ' "$IG_UI_CYAN" "TCP-порт:" "$IG_UI_RESET" >&2
+                    IFS= read -r custom < "$IG_UI_TTY"
+                    ;;
+            esac
+            if ! [[ "$custom" =~ ^[0-9]+$ ]] || [ "$custom" -lt 1 ] || [ "$custom" -gt 65535 ]; then
+                ig_ui_status error "Некорректный порт" "Введите число от 1 до 65535."
+                continue
+            fi
+            if ! installer_port_is_usable "$custom"; then
+                owner=$(installer_port_owner_label "$custom")
+                ig_ui_status error "TCP/${custom} занят" "$owner"
+                continue
+            fi
+            INSTALLER_SELECTED_PORT="$custom"
+            printf '%s\n' "$custom"
+            return 0
+        fi
         echo "" >&2
         echo -e "  ${BOLD:-}Публичный порт прокси${NC:-}" >&2
         echo -e "  ${GREEN:-}1)${NC:-} ${recommended} — рекомендуется" >&2
@@ -557,7 +629,27 @@ installer_domain_preflight() {
 }
 
 installer_choose_mode() {
+    if type ig_ui_select >/dev/null 2>&1; then
+        ig_ui_heading "ШАГ 3 · ПУБЛИКАЦИЯ" "Как публиковать прокси?" \
+            "Сайт нужен только для HTTPS-маскировки и запасной кнопки подключения."
+        if [ "${DEPLOYMENT_ROLE:-standalone}" = "hub" ]; then
+            ig_ui_status active "Свой домен и сайт" \
+                "Центру нужен HTTPS-адрес для безопасного подключения дополнительных узлов."
+            ig_ui_note "Прокси может слушать не 443, если этот порт занят другой службой."
+            printf 'pro\n'
+            return 0
+        fi
+        ig_ui_select "Выберите режим" 2 \
+            "pro|Свой домен и сайт|HTTPS-витрина, сертификат Let's Encrypt и MTProxy.|Нужен DNS" \
+            "lite|Только прокси|Без nginx и сертификата. Подходит при занятом TCP/443.|Рекомендуется"
+        return $?
+    fi
     local choice
+    if [ "${DEPLOYMENT_ROLE:-standalone}" = "hub" ]; then
+        echo "  Для центра управления нужен свой домен и HTTPS-сайт." >&2
+        printf 'pro\n'
+        return 0
+    fi
     echo "" >&2
     echo -e "  ${BOLD:-}Что установить?${NC:-}" >&2
     echo -e "  ${CYAN:-}1)${NC:-} ${BOLD:-}Свой домен и сайт${NC:-}" >&2
@@ -572,6 +664,44 @@ installer_choose_mode() {
         2) printf 'lite\n' ;;
         0) return 1 ;;
         *) log_error "Выберите 1, 2 или 0."; return 1 ;;
+    esac
+}
+
+installer_role_title() {
+    case "${1:-standalone}" in
+        hub) printf 'Центр управления + прокси' ;;
+        node) printf 'Дополнительный прокси-узел' ;;
+        controller) printf 'Только центр управления' ;;
+        *) printf 'Автономный сервер' ;;
+    esac
+}
+
+installer_choose_deployment_role() {
+    if type ig_ui_select >/dev/null 2>&1; then
+        ig_ui_logo "Мастер новой инфраструктуры"
+        ig_ui_stepper 1 "Роль" "Проверка" "Публикация" "Установка"
+        ig_ui_heading "ШАГ 1 · РОЛЬ СЕРВЕРА" "Что будет делать этот VPS?" \
+            "Один центр управляет пользователями, дополнительные узлы только обслуживают трафик."
+        ig_ui_select "Выберите роль" 1 \
+            "hub|Центр управления + прокси|Единый Telegram-бот, web-панель и локальный MTProxy.|Первый сервер" \
+            "node|Дополнительный прокси-узел|Подключается к существующему центру и не запускает второго бота.|Для масштабирования" \
+            "standalone|Автономный сервер|Обычная независимая установка без объединения в сеть.|Совместимый режим"
+        return $?
+    fi
+    local choice
+    echo "" >&2
+    echo "  Роль сервера:" >&2
+    echo "  1) Центр управления + прокси" >&2
+    echo "  2) Дополнительный прокси-узел" >&2
+    echo "  3) Автономный сервер" >&2
+    echo -ne "  Выбор [1]: " >&2
+    read -r choice
+    case "${choice:-1}" in
+        1) printf 'hub\n' ;;
+        2) printf 'node\n' ;;
+        3) printf 'standalone\n' ;;
+        0) return 1 ;;
+        *) return 1 ;;
     esac
 }
 
@@ -661,6 +791,13 @@ installer_transaction_begin() {
     installer_tx_copy_if_exists "${WEBSITE_ROOT:-/var/www/gotelegram-site}"
     installer_tx_copy_if_exists /etc/systemd/system/gotelegram-certbot-renew.service
     installer_tx_copy_if_exists /etc/systemd/system/gotelegram-certbot-renew.timer
+    installer_tx_copy_if_exists /etc/systemd/system/igproxy-hub.service
+    installer_tx_copy_if_exists /etc/systemd/system/igproxy-node.service
+    installer_tx_copy_if_exists /opt/igproxy-hub
+    installer_tx_copy_if_exists /opt/igproxy-node
+    installer_tx_copy_if_exists /var/lib/igproxy-node
+    installer_tx_copy_if_exists /opt/gotelegram/hub-registry.json
+    installer_tx_copy_if_exists /etc/nginx/conf.d/igproxy-hub-limits.conf
     if [ -n "$INSTALLER_TX_DOMAIN" ]; then
         validate_domain "$INSTALLER_TX_DOMAIN" || {
             log_error "Некорректный домен для rollback-снимка."
@@ -677,6 +814,8 @@ installer_transaction_begin() {
     installer_tx_service_state gotelegram-bot
     installer_tx_service_state certbot.timer
     installer_tx_service_state gotelegram-certbot-renew.timer
+    installer_tx_service_state igproxy-hub
+    installer_tx_service_state igproxy-node
     chmod -R go-rwx "$INSTALLER_TX_DIR" 2>/dev/null || true
     trap 'installer_transaction_rollback "получен сигнал"; exit 130' INT TERM HUP
     log_success "Создана точка отката: $INSTALLER_TX_DIR"
@@ -698,7 +837,14 @@ installer_transaction_restore_files() {
             /etc/systemd/journald.conf.d/99-gotelegram.conf|\
             /etc/rsyslog.d/00-gotelegram-telemt.conf|\
             /etc/systemd/system/gotelegram-certbot-renew.service|\
-            /etc/systemd/system/gotelegram-certbot-renew.timer) ;;
+            /etc/systemd/system/gotelegram-certbot-renew.timer|\
+            /etc/systemd/system/igproxy-hub.service|\
+            /etc/systemd/system/igproxy-node.service|\
+            /opt/igproxy-hub|\
+            /opt/igproxy-node|\
+            /var/lib/igproxy-node|\
+            /opt/gotelegram/hub-registry.json|\
+            /etc/nginx/conf.d/igproxy-hub-limits.conf) ;;
             *)
                 if [ -n "$INSTALLER_TX_DOMAIN" ]; then
                     case "$path" in
@@ -764,7 +910,7 @@ installer_transaction_rollback() {
         return 1
     fi
     log_warning "Откат изменений: $reason"
-    systemctl stop telemt nginx >/dev/null 2>&1 || true
+    systemctl stop telemt nginx igproxy-hub igproxy-node >/dev/null 2>&1 || true
     installer_transaction_restore_files || restore_ok=0
     if [ -f "$INSTALLER_TX_DIR/selinux-http-ports.manifest" ] && command -v semanage >/dev/null 2>&1; then
         local selinux_port

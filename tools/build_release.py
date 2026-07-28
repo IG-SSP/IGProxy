@@ -18,6 +18,7 @@ PAYLOAD_PATHS = (
     "install_gotelegram_bot.sh",
     "templates_catalog.json",
     "lib",
+    "cluster",
     "gotelegram-bot",
     "admin-web",
     "site-presets",
