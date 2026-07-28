@@ -120,6 +120,16 @@ installer_port_is_usable 8443
         )
         self.assertEqual(result.returncode, 0, result.stderr)
 
+    def test_mixed_listeners_are_not_classified_as_our_telemt(self):
+        result = run_bash(
+            """
+installer_existing_public_port() { printf '443\\n'; }
+listener='LISTEN 0 4096 0.0.0.0:443 users:(("telemt",pid=7));LISTEN 0 4096 [::]:443 users:(("xray",pid=8))'
+installer_listener_is_ours 443 "$listener"
+"""
+        )
+        self.assertNotEqual(result.returncode, 0)
+
     def test_preflight_inventory_names_known_network_services(self):
         result = run_bash(
             """
@@ -353,6 +363,9 @@ printf '0\\n' | installer_preflight_run interactive
         self.assertIn('INSTALLER_DOMAIN_CERT_REUSED=1', WIZARD.read_text(encoding="utf-8"))
         self.assertIn("INSTALLER_DOMAIN_HTTP_LISTENER=0", WIZARD.read_text(encoding="utf-8"))
         self.assertIn("HTTP_SERVER_PLACEHOLDER", website)
+        self.assertIn("prepare_nginx_without_public_http", website)
+        self.assertIn("/etc/nginx/sites-enabled/default", WIZARD.read_text(encoding="utf-8"))
+        self.assertIn('systemctl restart nginx || {', website)
         self.assertIn('INSTALLER_TX_CERT_NAME="${INSTALLER_DOMAIN_CERT_LINEAGE:-}"', INSTALL.read_text(encoding="utf-8"))
         self.assertIn('installer_firewall_check_ports "$public_port" || return', INSTALL.read_text(encoding="utf-8"))
 

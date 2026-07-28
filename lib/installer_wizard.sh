@@ -20,13 +20,13 @@ installer_port_listener_protocol() {
         *) return 1 ;;
     esac
     if command -v ss >/dev/null 2>&1; then
-        line=$(ss -H "$ss_flags" "sport = :${port}" 2>/dev/null | head -1)
-        [ -z "$line" ] && line=$(ss -H "$ss_flags" 2>/dev/null | awk -v p=":${port}" '$5 ~ p"$" || $4 ~ p"$" {print; exit}')
+        line=$(ss -H "$ss_flags" "sport = :${port}" 2>/dev/null)
+        [ -z "$line" ] && line=$(ss -H "$ss_flags" 2>/dev/null | awk -v p=":${port}" '$5 ~ p"$" || $4 ~ p"$" {print}')
     fi
     if [ -z "$line" ] && command -v netstat >/dev/null 2>&1; then
-        line=$(netstat "$netstat_flags" 2>/dev/null | awk -v p=":${port}" '$4 ~ p"$" {print; exit}')
+        line=$(netstat "$netstat_flags" 2>/dev/null | awk -v p=":${port}" '$4 ~ p"$" {print}')
     fi
-    installer_trim_line "$line"
+    printf '%s\n' "$line" | sed '/^[[:space:]]*$/d' | tr '\n' ';' | sed -E 's/;+$//; s/[[:space:]]+/ /g' | cut -c1-480
 }
 
 installer_port_listener() {
@@ -63,6 +63,13 @@ EOF
     fi
 }
 
+installer_listener_all_match() {
+    local listener="$1" pattern="$2"
+    [ -n "$listener" ] || return 1
+    printf '%s\n' "$listener" | tr ';' '\n' |
+        awk -v pattern="$pattern" 'NF && tolower($0) !~ pattern { bad=1 } END { exit(bad ? 1 : 0) }'
+}
+
 installer_existing_public_port() {
     local port=""
     if [ -f "${TELEMT_CONFIG:-/etc/telemt/config.toml}" ] && type get_config_value >/dev/null 2>&1; then
@@ -77,7 +84,7 @@ installer_existing_public_port() {
 installer_listener_is_ours() {
     local port="$1" listener="${2:-}"
     [ -n "$listener" ] || return 1
-    printf '%s' "$listener" | grep -Eiq 'telemt' || return 1
+    installer_listener_all_match "$listener" 'telemt' || return 1
     local existing
     existing=$(installer_existing_public_port)
     [ -n "$existing" ] && [ "$existing" = "$port" ]
@@ -617,7 +624,7 @@ installer_domain_http_preflight() {
     local cert_reused="${1:-0}" owner80
     INSTALLER_DOMAIN_HTTP_LISTENER=1
     owner80=$(installer_port_listener 80)
-    if [ -n "$owner80" ] && ! printf '%s' "$owner80" | grep -Eiq 'nginx'; then
+    if [ -n "$owner80" ] && ! installer_listener_all_match "$owner80" 'nginx'; then
         if [ "$cert_reused" = "1" ]; then
             INSTALLER_DOMAIN_HTTP_LISTENER=0
             log_warning "TCP/80 занят другой службой: $(installer_trim_line "$owner80")."
@@ -885,6 +892,7 @@ installer_transaction_begin() {
     installer_tx_copy_if_exists "${TELEMT_BIN:-/usr/local/bin/telemt}"
     installer_tx_copy_if_exists "${NGINX_SITE_CONF:-/etc/nginx/sites-available/gotelegram}"
     installer_tx_copy_if_exists "${NGINX_SITE_LINK:-/etc/nginx/sites-enabled/gotelegram}"
+    installer_tx_copy_if_exists /etc/nginx/sites-enabled/default
     installer_tx_copy_if_exists /etc/systemd/system/telemt.service
     installer_tx_copy_if_exists /etc/sysctl.d/99-zz-gotelegram.conf
     installer_tx_copy_if_exists /etc/systemd/journald.conf.d/99-gotelegram.conf
@@ -941,6 +949,7 @@ installer_transaction_restore_files() {
             "${TELEMT_BIN:-/usr/local/bin/telemt}"|\
             "${NGINX_SITE_CONF:-/etc/nginx/sites-available/gotelegram}"|\
             "${NGINX_SITE_LINK:-/etc/nginx/sites-enabled/gotelegram}"|\
+            /etc/nginx/sites-enabled/default|\
             "${WEBSITE_ROOT:-/var/www/gotelegram-site}"|\
             /etc/systemd/system/telemt.service|\
             /etc/sysctl.d/99-zz-gotelegram.conf|\

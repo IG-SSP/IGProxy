@@ -3,17 +3,45 @@
 
 # ── Установка nginx ──────────────────────────────────────────────────────────
 install_nginx() {
+    local enable_http_listener="${1:-1}" policy_created=0
     if command -v nginx &>/dev/null; then
         log_dim "nginx уже установлен"
         return 0
     fi
     log_info "Установка nginx..."
     case "$(get_pkg_manager)" in
-        apt) apt_update && apt_install nginx || return 1 ;;
+        apt)
+            if [ "$enable_http_listener" != "1" ] && [ ! -e /usr/sbin/policy-rc.d ]; then
+                printf '#!/bin/sh\nexit 101\n' > /usr/sbin/policy-rc.d || return 1
+                chmod 755 /usr/sbin/policy-rc.d
+                policy_created=1
+            fi
+            if ! apt_update || ! apt_install nginx; then
+                [ "$policy_created" = "1" ] && rm -f -- /usr/sbin/policy-rc.d
+                return 1
+            fi
+            [ "$policy_created" = "1" ] && rm -f -- /usr/sbin/policy-rc.d
+            ;;
         dnf) dnf install -y -q nginx || return 1 ;;
         yum) yum install -y -q nginx || return 1 ;;
     esac
     systemctl enable nginx 2>/dev/null
+}
+
+prepare_nginx_without_public_http() {
+    local default_link=/etc/nginx/sites-enabled/default default_target=""
+    if [ -L "$default_link" ]; then
+        default_target=$(readlink -f "$default_link" 2>/dev/null || true)
+        if [ "$default_target" = "/etc/nginx/sites-available/default" ]; then
+            rm -f -- "$default_link" || return 1
+            log_dim "Отключена только стандартная заглушка nginx на TCP/80."
+        fi
+    fi
+    if nginx -T 2>&1 | grep -Eq '^[[:space:]]*listen[[:space:]]+([^[:space:];]+:)?80([[:space:];]|$)'; then
+        log_error "В существующей конфигурации nginx остался listener TCP/80."
+        log_dim "IGProxy не будет менять пользовательские сайты. Освободите TCP/80 в nginx вручную или используйте режим без сайта."
+        return 1
+    fi
 }
 
 # ── Установка certbot ────────────────────────────────────────────────────────
@@ -478,7 +506,10 @@ setup_pro_mode() {
     log_step "Настройка своего домена и сайта"
 
     # 1. Устанавливаем nginx
-    run_with_spinner "Установка nginx" install_nginx || return 1
+    run_with_spinner "Установка nginx" install_nginx "$enable_http_listener" || return 1
+    if [ "$enable_http_listener" != "1" ]; then
+        prepare_nginx_without_public_http || return 1
+    fi
 
     # 2. Устанавливаем certbot
     run_with_spinner "Установка certbot" install_certbot || return 1
@@ -498,7 +529,10 @@ setup_pro_mode() {
 
     # 6. Тестируем и перезапускаем nginx
     if nginx -t 2>/dev/null; then
-        systemctl restart nginx
+        systemctl restart nginx || {
+            log_error "nginx-конфигурация корректна, но служба не запустилась."
+            return 1
+        }
         log_success "nginx запущен с SSL"
     else
         log_error "Ошибка в конфигурации nginx"
