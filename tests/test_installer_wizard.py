@@ -382,6 +382,16 @@ printf '0\\n' | installer_preflight_run interactive
         self.assertIn('systemctl restart nginx || {', website)
         self.assertIn('INSTALLER_TX_CERT_NAME="${INSTALLER_DOMAIN_CERT_LINEAGE:-}"', INSTALL.read_text(encoding="utf-8"))
         self.assertIn('installer_firewall_check_ports "$public_port" || return', INSTALL.read_text(encoding="utf-8"))
+        self.assertIn('acme_webroot_probe "$domain" || probe_status=$?', website)
+        self.assertLess(
+            website.index('acme_webroot_probe "$domain"'),
+            website.index('certbot "${certbot_args[@]}"'),
+        )
+        self.assertIn("Запрос в Let's Encrypt не отправлялся.", website)
+        self.assertIn('if confirm "Временно остановить nginx', website)
+        self.assertIn('--pre-hook "systemctl stop nginx"', website)
+        self.assertIn('--post-hook "systemctl start nginx"', website)
+        self.assertIn('systemctl start nginx', website)
 
     def test_new_installer_uses_only_bundled_igproxy_site_presets(self):
         install = INSTALL.read_text(encoding="utf-8")

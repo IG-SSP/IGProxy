@@ -110,7 +110,7 @@ def _read_gotelegram_version() -> str:
                 return str(_v)
     except Exception:
         pass
-    return "2.15.3"
+    return "2.15.4"
 
 
 GOTELEGRAM_VERSION = _read_gotelegram_version()
@@ -130,6 +130,7 @@ ENV_FILE = "/opt/gotelegram-bot/.env"
 ADMIN_WEB_SERVICE = "gotelegram-admin"
 ADMIN_WEB_PORT = 1984
 ADMIN_WEB_GUIDE = _BOT_DIR / "assets" / "termius-port-forwarding.png"
+IGPROXY_HUB_CLI = Path("/opt/igproxy-hub/hub_server.py")
 
 
 def format_bytes_human(value: int) -> str:
@@ -770,7 +771,13 @@ def admin_client_servers_keyboard() -> InlineKeyboardMarkup:
         )]
         for item in get_client_servers()
     ]
-    rows.append([InlineKeyboardButton("➕ Добавить сервер", callback_data="client_server_add")])
+    config = load_json(GOTELEGRAM_CONFIG) or {}
+    if config.get("deployment_role") in {"hub", "controller"}:
+        rows.append([InlineKeyboardButton(
+            "🔗 Код подключения узла",
+            callback_data="cluster_pairing_code",
+        )])
+    rows.append([InlineKeyboardButton("➕ Добавить сервер вручную", callback_data="client_server_add")])
     rows.append([InlineKeyboardButton("‹ Назад", callback_data="menu_main")])
     return InlineKeyboardMarkup(rows)
 
@@ -789,6 +796,87 @@ async def cb_client_servers(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         query,
         text,
         reply_markup=admin_client_servers_keyboard(),
+        parse_mode="HTML",
+    )
+
+
+def create_cluster_pairing_code() -> Dict[str, Any]:
+    """Create a short-lived Hub enrollment code without invoking a shell."""
+    config = load_json(GOTELEGRAM_CONFIG) or {}
+    if config.get("deployment_role") not in {"hub", "controller"}:
+        raise RuntimeError("Этот сервер не является центром IGProxy")
+    if not IGPROXY_HUB_CLI.is_file():
+        raise RuntimeError("Компонент центра IGProxy не установлен")
+
+    result = subprocess.run(
+        [sys.executable, str(IGPROXY_HUB_CLI), "create-code", "--ttl", "1800"],
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=8,
+    )
+    if result.returncode != 0:
+        raise RuntimeError("Центр не смог создать код подключения")
+    payload = json.loads(result.stdout)
+    if not isinstance(payload, dict):
+        raise RuntimeError("Центр вернул некорректный ответ")
+    code = str(payload.get("code") or "")
+    expires_at = int(payload.get("expires_at") or 0)
+    if not re.fullmatch(r"[A-Za-z0-9_-]{32,128}", code) or expires_at <= int(time.time()):
+        raise RuntimeError("Центр вернул некорректный код подключения")
+
+    domain = str(config.get("domain") or "").strip()
+    port = int(config.get("port") or 443)
+    if not domain or not 1 <= port <= 65535:
+        raise RuntimeError("В центре не настроен публичный домен")
+    authority = domain if port == 443 else f"{domain}:{port}"
+    return {
+        "code": code,
+        "expires_at": expires_at,
+        "hub_url": f"https://{authority}/__igproxy",
+    }
+
+
+async def cb_cluster_pairing_code(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+) -> None:
+    query = update.callback_query
+    await query.answer("Создаю одноразовый код…")
+    try:
+        payload = await asyncio.to_thread(create_cluster_pairing_code)
+    except (
+        RuntimeError,
+        ValueError,
+        OSError,
+        json.JSONDecodeError,
+        subprocess.TimeoutExpired,
+    ) as exc:
+        logger.warning("Unable to create cluster pairing code: %s", type(exc).__name__)
+        await safe_edit_message(
+            query,
+            f"<b>Не удалось создать код</b>\n\n{html.escape(str(exc))}",
+            reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton("‹ К серверам", callback_data="menu_client_servers"),
+            ]]),
+            parse_mode="HTML",
+        )
+        return
+
+    await safe_edit_message(
+        query,
+        "<b>🔗 Подключение нового узла</b>\n\n"
+        f"Адрес центра:\n<code>{html.escape(payload['hub_url'])}</code>\n\n"
+        f"Одноразовый код:\n<code>{html.escape(payload['code'])}</code>\n\n"
+        "Код действует <b>30 минут</b> и используется только один раз. "
+        "На новом VPS выберите роль «Дополнительный прокси-узел».",
+        reply_markup=InlineKeyboardMarkup([
+            [InlineKeyboardButton(
+                "Создать новый код",
+                callback_data="cluster_pairing_code",
+            )],
+            [InlineKeyboardButton("Скрыть код", callback_data="menu_client_servers")],
+        ]),
         parse_mode="HTML",
     )
 
@@ -3490,6 +3578,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         "menu_admins": cb_menu_admins,
         "menu_users": cb_menu_users,
         "menu_client_servers": cb_client_servers,
+        "cluster_pairing_code": cb_cluster_pairing_code,
         "menu_client_view": cb_client_view,
         "client_server_add": cb_client_server_add,
         "backup_create": cb_backup_create,

@@ -293,10 +293,42 @@ igproxy_certificate_lineage_name() {
     printf 'igproxy-%s\n' "$digest"
 }
 
+acme_webroot_probe() {
+    local domain="$1" token expected challenge_dir challenge_file uri local_body public_body
+    token=$(openssl rand -hex 12 2>/dev/null) || return 1
+    expected="igproxy-acme-probe-${token}"
+    challenge_dir="/var/www/certbot/.well-known/acme-challenge"
+    challenge_file="$challenge_dir/$token"
+    uri="/.well-known/acme-challenge/$token"
+    mkdir -p "$challenge_dir" || return 1
+    printf '%s' "$expected" > "$challenge_file" || return 1
+    chmod 644 "$challenge_file"
+
+    local_body=$(curl -4fsS --noproxy '*' --max-time 5 \
+        --resolve "${domain}:80:127.0.0.1" "http://${domain}${uri}" 2>/dev/null || true)
+    if [ "$local_body" != "$expected" ]; then
+        rm -f -- "$challenge_file"
+        log_warning "Временный nginx не отдаёт ACME-файл для домена $domain."
+        log_dim "Обычно это означает другой server_name на TCP/80 или существующую конфигурацию 3x-ui/nginx."
+        return 10
+    fi
+
+    public_body=$(curl -4fsS --noproxy '*' --max-time 8 \
+        "http://${domain}${uri}" 2>/dev/null || true)
+    rm -f -- "$challenge_file"
+    if [ "$public_body" != "$expected" ]; then
+        log_error "ACME-файл доступен локально, но недоступен через публичный порт 80."
+        log_dim "Проверьте firewall, проброс порта и внешний reverse proxy. Запрос в Let's Encrypt не отправлялся."
+        return 11
+    fi
+    log_success "Публичная проверка ACME challenge пройдена"
+}
+
 obtain_ssl_certificate() {
     local domain="$1"
     local email="${2:-}"
     local cert_live_dir="" dedicated_name="" dedicated_dir=""
+    local challenge_mode="webroot" nginx_stopped=0 probe_status=0
     IGPROXY_CERT_WAS_REUSED=0
 
     if ! cert_live_dir=$(ssl_certificate_live_dir "$domain"); then
@@ -313,10 +345,36 @@ obtain_ssl_certificate() {
             return 1
         }
 
-        local certbot_args=(
-            certonly
-            --webroot
-            -w /var/www/certbot
+        acme_webroot_probe "$domain" || probe_status=$?
+        case "$probe_status" in
+            0) ;;
+            10)
+                log_warning "Webroot-конфликт можно обойти одноразовым standalone challenge."
+                log_dim "Для этого nginx будет остановлен примерно на 10–30 секунд; его файлы не изменяются."
+                if confirm "Временно остановить nginx только на время выпуска сертификата?"; then
+                    challenge_mode="standalone"
+                else
+                    log_error "Выпуск сертификата отменён до обращения в Let's Encrypt."
+                    return 1
+                fi
+                ;;
+            *) return 1 ;;
+        esac
+
+        local certbot_args=(certonly)
+        if [ "$challenge_mode" = "webroot" ]; then
+            certbot_args+=(--webroot -w /var/www/certbot)
+        else
+            # Хуки сохраняются в renewal-конфигурации этой линии: при будущем
+            # renew standalone снова освободит TCP/80 и обязательно вернёт nginx.
+            certbot_args+=(
+                --standalone
+                --preferred-challenges http
+                --pre-hook "systemctl stop nginx"
+                --post-hook "systemctl start nginx"
+            )
+        fi
+        certbot_args+=(
             -d "$domain"
             --non-interactive
             --agree-tos
@@ -340,7 +398,20 @@ obtain_ssl_certificate() {
         local certbot_log
         certbot_log=$(mktemp /tmp/gotelegram-certbot.XXXXXX) || return 1
         chmod 600 "$certbot_log"
-        if certbot "${certbot_args[@]}" >"$certbot_log" 2>&1; then
+        [ "$challenge_mode" != "standalone" ] || nginx_stopped=1
+
+        local certbot_ok=0
+        certbot "${certbot_args[@]}" >"$certbot_log" 2>&1 && certbot_ok=1
+        if [ "$nginx_stopped" = "1" ]; then
+            if ! systemctl start nginx; then
+                log_error "После ACME challenge не удалось снова запустить nginx."
+                tail -n 8 "$certbot_log" | sed 's/^/    /' >&2
+                rm -f -- "$certbot_log"
+                return 1
+            fi
+        fi
+
+        if [ "$certbot_ok" = "1" ]; then
             rm -f -- "$certbot_log"
             cert_live_dir=$(ssl_certificate_live_dir "$domain" 2>/dev/null || true)
             if [ -n "$cert_live_dir" ]; then

@@ -130,6 +130,16 @@ class BotFeatureTests(unittest.TestCase):
         self.assertIn('callback_data="menu_main"', source)
         self.assertIn("‹ Назад в Управление", source)
 
+    def test_hub_admin_can_create_short_lived_pairing_code(self):
+        source = BOT_PATH.read_text(encoding="utf-8")
+        self.assertIn('callback_data="cluster_pairing_code"', source)
+        self.assertIn('"cluster_pairing_code": cb_cluster_pairing_code', source)
+        self.assertIn("def create_cluster_pairing_code()", source)
+        self.assertIn('"create-code", "--ttl", "1800"', source)
+        self.assertIn("Код действует <b>30 минут</b>", source)
+        self.assertIn("await asyncio.to_thread(create_cluster_pairing_code)", source)
+        self.assertNotIn("shell=True", source)
+
     def test_brand_and_sponsor_are_loaded_from_shared_config(self):
         source = BOT_PATH.read_text(encoding="utf-8")
         self.assertIn('config.get("brand_enabled", True)', source)
