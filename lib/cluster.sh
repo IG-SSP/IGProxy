@@ -119,7 +119,20 @@ EOF
         log_error "Служба центра управления не запустилась."
         return 1
     fi
-    if ! curl -fsS --max-time 5 "http://127.0.0.1:${IGPROXY_HUB_PORT}/v1/health" >/dev/null; then
+    # systemd переводит процесс в active раньше, чем Python успевает открыть
+    # loopback-сокет. Даём Hub до 10 секунд на готовность вместо ложного отката.
+    local waited=0 hub_ready=0
+    while [ "$waited" -lt 10 ]; do
+        if curl -fsS --max-time 2 \
+            "http://127.0.0.1:${IGPROXY_HUB_PORT}/v1/health" >/dev/null 2>&1; then
+            hub_ready=1
+            break
+        fi
+        systemctl is-active --quiet "$IGPROXY_HUB_SERVICE" || break
+        sleep 1
+        waited=$((waited + 1))
+    done
+    if [ "$hub_ready" != "1" ]; then
         log_error "Локальная проверка IGProxy Hub не пройдена."
         return 1
     fi

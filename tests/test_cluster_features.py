@@ -115,6 +115,13 @@ class ClusterFeatureTests(unittest.TestCase):
             handler.redirect_request(None, None, 302, "Found", {}, "https://evil.example/")
         )
 
+    def test_hub_installer_waits_for_loopback_health(self):
+        source = (ROOT / "lib" / "cluster.sh").read_text(encoding="utf-8")
+        self.assertIn('while [ "$waited" -lt 10 ]; do', source)
+        self.assertIn('hub_ready=1', source)
+        self.assertIn('systemctl is-active --quiet "$IGPROXY_HUB_SERVICE" || break', source)
+        self.assertIn('if [ "$hub_ready" != "1" ]; then', source)
+
 
 if __name__ == "__main__":
     unittest.main()
