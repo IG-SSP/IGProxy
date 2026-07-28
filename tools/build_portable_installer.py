@@ -21,7 +21,7 @@ if _RELEASE_SPEC is None or _RELEASE_SPEC.loader is None:
 _RELEASE_MODULE = importlib.util.module_from_spec(_RELEASE_SPEC)
 _RELEASE_SPEC.loader.exec_module(_RELEASE_MODULE)
 build_release = _RELEASE_MODULE.build
-validate_release_file = _RELEASE_MODULE.validate_release_file
+tracked_release_file = _RELEASE_MODULE.tracked_release_file
 
 
 def digest_bytes(payload: bytes) -> str:
@@ -34,8 +34,7 @@ def build(output: Path) -> str:
     archive = output.with_name(f".{output.name}.payload.tar.gz")
     archive_sha = build_release(archive)
     archive_bytes = archive.read_bytes()
-    bootstrap_path = ROOT / "bootstrap.sh"
-    validate_release_file(bootstrap_path, Path("bootstrap.sh"))
+    bootstrap_path = tracked_release_file("bootstrap.sh")
     bootstrap = bootstrap_path.read_text(encoding="utf-8")
     archive.unlink()
     archive.with_suffix(archive.suffix + ".sha256").unlink(missing_ok=True)

@@ -57,6 +57,37 @@ def validate_release_file(path: Path, name: PurePosixPath) -> None:
             raise RuntimeError(f"refusing to package {label} in {name.as_posix()}")
 
 
+def validate_release_source(
+    path: Path, name: PurePosixPath, root: Path = ROOT
+) -> None:
+    if path.is_symlink():
+        raise RuntimeError(f"refusing to package symlink: {name.as_posix()}")
+    try:
+        path.resolve(strict=True).relative_to(root.resolve(strict=True))
+    except (FileNotFoundError, ValueError) as error:
+        raise RuntimeError(
+            f"release source escapes repository root: {name.as_posix()}"
+        ) from error
+    if not path.is_file():
+        raise FileNotFoundError(f"tracked release file is missing: {name.as_posix()}")
+    validate_release_file(path, name)
+
+
+def tracked_release_file(relative: str) -> Path:
+    result = subprocess.run(
+        ["git", "-C", str(ROOT), "ls-files", "--error-unmatch", "--", relative],
+        check=True,
+        capture_output=True,
+    )
+    tracked_name = result.stdout.decode("utf-8").strip()
+    if tracked_name != relative:
+        raise RuntimeError(f"unexpected tracked release path: {tracked_name!r}")
+    name = PurePosixPath(relative)
+    source = ROOT.joinpath(*name.parts)
+    validate_release_source(source, name)
+    return source
+
+
 def payload_files() -> list[tuple[Path, PurePosixPath]]:
     for relative in PAYLOAD_PATHS:
         if not (ROOT / relative).exists():
@@ -75,9 +106,7 @@ def payload_files() -> list[tuple[Path, PurePosixPath]]:
     for raw_name in tracked:
         relative = PurePosixPath(raw_name.decode("utf-8"))
         source = ROOT.joinpath(*relative.parts)
-        if not source.is_file():
-            raise FileNotFoundError(f"tracked release file is missing: {relative.as_posix()}")
-        validate_release_file(source, relative)
+        validate_release_source(source, relative)
         files.append((source, relative))
     return sorted(files, key=lambda item: item[1].as_posix())
 

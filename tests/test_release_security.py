@@ -99,6 +99,25 @@ class ReleaseSecurityTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "Telegram bot token"):
                 module.validate_release_file(token_file, Path("settings.txt"))
 
+    def test_release_builder_rejects_symlink_escape(self):
+        spec = importlib.util.spec_from_file_location("release_builder", BUILDER)
+        module = importlib.util.module_from_spec(spec)
+        assert spec.loader is not None
+        spec.loader.exec_module(module)
+
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp) / "root"
+            root.mkdir()
+            outside = Path(temp) / "outside.txt"
+            outside.write_text("not part of the release", encoding="utf-8")
+            link = root / "innocent.txt"
+            try:
+                link.symlink_to(outside)
+            except OSError:
+                self.skipTest("symlinks unavailable")
+            with self.assertRaisesRegex(RuntimeError, "symlink"):
+                module.validate_release_source(link, Path("innocent.txt"), root)
+
     def test_preupgrade_snapshot_is_private_and_uses_unpredictable_paths(self):
         source = (ROOT / "install.sh").read_text(encoding="utf-8")
         body = source[source.index("snapshot_preupgrade_state()"):source.index("read_config_or_default()")]
