@@ -4,6 +4,7 @@
 # ── Установка nginx ──────────────────────────────────────────────────────────
 install_nginx() {
     local enable_http_listener="${1:-1}" policy_created=0
+    IGPROXY_NGINX_INSTALLED_NOW=0
     if command -v nginx &>/dev/null; then
         log_dim "nginx уже установлен"
         return 0
@@ -25,12 +26,13 @@ install_nginx() {
         dnf) dnf install -y -q nginx || return 1 ;;
         yum) yum install -y -q nginx || return 1 ;;
     esac
+    IGPROXY_NGINX_INSTALLED_NOW=1
     systemctl enable nginx 2>/dev/null
 }
 
 prepare_nginx_without_public_http() {
     local default_link=/etc/nginx/sites-enabled/default default_target=""
-    if [ -L "$default_link" ]; then
+    if [ "${IGPROXY_NGINX_INSTALLED_NOW:-0}" = "1" ] && [ -L "$default_link" ]; then
         default_target=$(readlink -f "$default_link" 2>/dev/null || true)
         if [ "$default_target" = "/etc/nginx/sites-available/default" ]; then
             rm -f -- "$default_link" || return 1
