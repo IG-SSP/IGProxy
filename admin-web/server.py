@@ -66,7 +66,7 @@ WEBSITE_ROOT = Path(os.getenv("GOTELEGRAM_WEBSITE_ROOT", "/var/www/gotelegram-si
 SITE_PRESETS_DIR = Path(os.getenv("GOTELEGRAM_SITE_PRESETS", "/opt/gotelegram/current/site-presets"))
 HOST = os.getenv("GOTELEGRAM_ADMIN_HOST", "127.0.0.1")
 PORT = int(os.getenv("GOTELEGRAM_ADMIN_PORT", "1984"))
-VERSION = "2.15.3"  # fallback only; live value read from config.json
+VERSION = "2.15.4"  # fallback only; live value read from config.json
 RUNTIME_COMMON_PATHS = (
     INSTALL_DIR / "current" / "lib" / "common.sh",
     Path(__file__).resolve().parents[1] / "lib" / "common.sh",
@@ -1533,7 +1533,7 @@ def health_payload(force: bool = False) -> dict[str, Any]:
             issues.append({
                 "level": "warn",
                 "title": f"Установлен telemt {version}",
-                "detail": "Для IGProxy 2.15.3 проверена версия 3.4.25.",
+                "detail": "Для IGProxy 2.15.4 проверена версия 3.4.25.",
                 "action": "Обновите ядро с резервной копией бинарника и конфига.",
             })
         if handshake_mss and not bulk_mss:
