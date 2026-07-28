@@ -524,6 +524,12 @@ class AdminFeatureTests(unittest.TestCase):
         self.assertIn('[data-layout="route-workshop"]', styles)
         self.assertIn(".site-preset-grid", styles)
 
+    def test_admin_startup_repairs_legacy_proxy_placeholders(self):
+        server = SERVER_PATH.read_text(encoding="utf-8")
+        self.assertIn('if "__PROXY_TG_LINK__" in upgraded or "__PROXY_LINK__" in upgraded:', server)
+        self.assertIn("telegram_proxy_deep_link(link)", server)
+        self.assertIn("atomic_write_text(published_index, upgraded, 0o644)", server)
+
     def test_telemt_general_writer_preserves_other_sections_and_removes_tag(self):
         with tempfile.TemporaryDirectory() as raw:
             server = load_server(Path(raw))

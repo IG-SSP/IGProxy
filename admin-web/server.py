@@ -2744,11 +2744,22 @@ def main() -> None:
         try:
             source = published_index.read_text(encoding="utf-8")
             upgraded = remove_legacy_webapp_bridge(source)
+            if "__PROXY_TG_LINK__" in upgraded or "__PROXY_LINK__" in upgraded:
+                config = load_json(GOTELEGRAM_CONFIG, {}) or {}
+                records = read_user_records()
+                key_name = str(config.get("site_key") or "main")
+                record = records.get(key_name)
+                if record and record.get("enabled"):
+                    link = proxy_link(str(record["secret"]))
+                    upgraded = (
+                        upgraded
+                        .replace("__PROXY_TG_LINK__", telegram_proxy_deep_link(link))
+                        .replace("__PROXY_LINK__", link)
+                    )
             if upgraded != source:
-                published_index.write_text(upgraded, encoding="utf-8")
-                os.chmod(published_index, 0o644)
+                atomic_write_text(published_index, upgraded, 0o644)
         except OSError as exc:
-            print(f"IGProxy legacy Web App bridge was not removed: {exc}")
+            print(f"IGProxy published site migration failed: {exc}")
     httpd = ThreadingHTTPServer((HOST, PORT), AdminHandler)
     print(f"IGProxy admin listening on http://{HOST}:{PORT}")
     httpd.serve_forever()
