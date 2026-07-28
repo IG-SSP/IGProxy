@@ -23,6 +23,7 @@ PAYLOAD_PATHS = (
     "admin-web",
     "site-presets",
     "DEPLOYMENT_PROFILES.md",
+    "INSTALLER_GUIDE.md",
 )
 
 

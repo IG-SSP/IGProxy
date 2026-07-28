@@ -289,13 +289,15 @@ def client_servers_payload(config: dict[str, Any] | None = None) -> list[dict[st
         except ValueError:
             continue
         if label:
-            result.append({
+            server = {
                 "id": item_id or hashlib.sha256(f"{label}\0{url}".encode()).hexdigest()[:8],
                 "label": label,
                 "url": url,
                 "enabled": bool(item.get("enabled", True)),
-                "managed": bool(item.get("managed", False)),
-            })
+            }
+            if bool(item.get("managed", False)):
+                server["managed"] = True
+            result.append(server)
     return result
 
 
