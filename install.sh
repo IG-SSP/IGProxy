@@ -367,7 +367,11 @@ write_normalized_gotelegram_config() {
         server_label=$(get_server_ip)
         raw_proxy_url=$(generate_proxy_link "$server_label" "$port" "$secret" "$mask_host")
     fi
-    proxy_url="https://t.me/proxy?${raw_proxy_url#tg://proxy?}"
+    case "$raw_proxy_url" in
+        https://t.me/proxy?*) proxy_url="$raw_proxy_url" ;;
+        tg://proxy?*) proxy_url="https://t.me/proxy?${raw_proxy_url#tg://proxy?}" ;;
+        *) log_error "Не удалось сформировать переносимую ссылку t.me"; return 1 ;;
+    esac
     client_servers=$(printf '%s' "$client_servers" | jq -c \
         --arg url "$proxy_url" \
         'map(
@@ -1222,6 +1226,7 @@ menu_link() {
     echo -e "  ${BOLD}${WHITE}$(t link_title)${NC}"
     echo ""
     echo -e "  ${GREEN}${link}${NC}"
+    save_proxy_link_for_copy "$link"
     echo ""
 
     if command -v qrencode &>/dev/null; then

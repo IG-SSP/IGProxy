@@ -501,7 +501,9 @@ installer_preflight_run() {
         return 1
     fi
     if [ "$interactive" = "interactive" ]; then
-        printf '\n  %sEnter — продолжить · 0 — назад%s ' "${DIM:-}" "${NC:-}" >&2
+        # DIM/NC из common.sh хранятся как printf-escape (\033...), поэтому
+        # печатаем их через %b. Иначе Termius показывает буквы "\033" на экране.
+        printf '\n  %bEnter — продолжить · 0 — назад%b ' "${DIM:-}" "${NC:-}" >&2
         local answer=""
         IFS= read -r answer < "${IG_UI_TTY:-/dev/stdin}" || answer=""
         case "$answer" in 0|q|Q) return 10 ;; esac

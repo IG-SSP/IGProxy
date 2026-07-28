@@ -33,7 +33,7 @@ class InstallerWizardTests(unittest.TestCase):
         self.assertIn("$existing_config + {", source)
         self.assertIn("--argjson client_servers", source)
         self.assertIn('{id: $id, label: $label, url: $url, enabled: true}', source)
-        self.assertIn('proxy_url="https://t.me/proxy?', source)
+        self.assertIn('https://t.me/proxy?*) proxy_url="$raw_proxy_url"', source)
         self.assertIn('generate_proxy_link "$domain" "$port" "$secret" "$domain"', source)
         self.assertIn('((.id // "") == "local")', source)
 
@@ -250,11 +250,24 @@ installer_preflight_json
             """
 installer_preflight_collect() { INSTALLER_PREFLIGHT_FATAL=0; }
 installer_preflight_show() { :; }
+DIM='\\033[2m'
+NC='\\033[0m'
 printf '0\\n' | installer_preflight_run interactive
 """
         )
         self.assertEqual(result.returncode, 10, result.stderr)
         self.assertIn("Enter — продолжить", result.stderr)
+        self.assertNotIn("\\033", result.stderr)
+        self.assertIn("\x1b[2m", result.stderr)
+
+    def test_public_proxy_links_use_t_me_and_offer_safe_copy_file(self):
+        telemt = (ROOT / "lib" / "telemt_config.sh").read_text(encoding="utf-8")
+        diagnose = (ROOT / "lib" / "diagnose.sh").read_text(encoding="utf-8")
+        self.assertIn('echo "https://t.me/proxy?server=', telemt)
+        self.assertIn("save_proxy_link_for_copy", telemt)
+        self.assertIn("/root/IGProxy-link.txt", telemt)
+        self.assertNotIn("echo \"tg://proxy?server=", telemt)
+        self.assertIn("https://t.me/proxy?server=%s", diagnose)
 
     def test_operator_installation_is_russian_only(self):
         install = INSTALL.read_text(encoding="utf-8")
