@@ -41,8 +41,10 @@ prepare_igproxy_site_preset story-transit {proxy_link!r}
             rendered_dir = Path(result.stdout.strip())
             rendered = (rendered_dir / "index.html").read_text(encoding="utf-8")
             self.assertIn(proxy_link, rendered)
+            self.assertIn("tg://proxy?server=example.com&port=9443&secret=eeabc", rendered)
             self.assertIn('const requested="transit"', rendered)
             self.assertNotIn("__PROXY_LINK__", rendered)
+            self.assertNotIn("__PROXY_TG_LINK__", rendered)
             self.assertNotIn("__LAYOUT__", rendered)
 
     @unittest.skipUnless(shutil.which("bash"), "requires bash")

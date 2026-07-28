@@ -12,16 +12,55 @@ installer_trim_line() {
     printf '%s' "${1:-}" | tr '\n\r\t' '   ' | sed -E 's/[[:space:]]+/ /g; s/^ //; s/ $//' | cut -c1-120
 }
 
-installer_port_listener() {
-    local port="$1" line=""
+installer_port_listener_protocol() {
+    local protocol="$1" port="$2" line="" ss_flags netstat_flags
+    case "$protocol" in
+        tcp) ss_flags="-ltnp"; netstat_flags="-tlnp" ;;
+        udp) ss_flags="-lunp"; netstat_flags="-ulnp" ;;
+        *) return 1 ;;
+    esac
     if command -v ss >/dev/null 2>&1; then
-        line=$(ss -H -ltnp "sport = :${port}" 2>/dev/null | head -1)
-        [ -z "$line" ] && line=$(ss -H -ltnp 2>/dev/null | awk -v p=":${port}" '$4 ~ p"$" {print; exit}')
+        line=$(ss -H "$ss_flags" "sport = :${port}" 2>/dev/null | head -1)
+        [ -z "$line" ] && line=$(ss -H "$ss_flags" 2>/dev/null | awk -v p=":${port}" '$5 ~ p"$" || $4 ~ p"$" {print; exit}')
     fi
     if [ -z "$line" ] && command -v netstat >/dev/null 2>&1; then
-        line=$(netstat -tlnp 2>/dev/null | awk -v p=":${port}" '$4 ~ p"$" {print; exit}')
+        line=$(netstat "$netstat_flags" 2>/dev/null | awk -v p=":${port}" '$4 ~ p"$" {print; exit}')
     fi
     installer_trim_line "$line"
+}
+
+installer_port_listener() {
+    installer_port_listener_protocol tcp "$1"
+}
+
+installer_udp_port_listener() {
+    installer_port_listener_protocol udp "$1"
+}
+
+installer_detect_network_services() {
+    local unit label active=()
+    command -v systemctl >/dev/null 2>&1 || {
+        printf 'systemd недоступен'
+        return
+    }
+    while IFS='|' read -r unit label; do
+        systemctl is-active --quiet "$unit" 2>/dev/null && active+=("$label")
+    done <<'EOF'
+hysteria-server|Hysteria
+hysteria|Hysteria
+x-ui|3x-ui
+3x-ui|3x-ui
+xray|Xray
+sing-box|sing-box
+caddy|Caddy
+nginx|nginx
+docker|Docker
+EOF
+    if [ "${#active[@]}" -eq 0 ]; then
+        printf 'не обнаружены'
+    else
+        printf '%s\n' "${active[@]}" | awk '!seen[$0]++' | paste -sd ', ' -
+    fi
 }
 
 installer_existing_public_port() {
@@ -301,6 +340,10 @@ installer_preflight_collect() {
     INSTALLER_PF_IP=$(get_server_ip 2>/dev/null || printf '0.0.0.0')
     INSTALLER_PF_PORT80=$(installer_port_owner_label 80)
     INSTALLER_PF_PORT443=$(installer_port_owner_label 443)
+    INSTALLER_PF_UDP443=$(installer_udp_port_listener 443)
+    INSTALLER_PF_TCP8443=$(installer_port_owner_label 8443)
+    INSTALLER_PF_UDP8443=$(installer_udp_port_listener 8443)
+    INSTALLER_PF_NETWORK_SERVICES=$(installer_detect_network_services)
     INSTALLER_PF_RECOMMENDED_PORT=$(installer_pick_recommended_port 2>/dev/null || true)
     INSTALLER_PF_FIREWALL=$(installer_firewall_label)
     INSTALLER_PF_SELINUX=$(installer_selinux_label)
@@ -363,6 +406,13 @@ installer_preflight_show() {
         installer_port_is_usable 443 &&
             ig_ui_status ok "Публичный TCP/443" "$INSTALLER_PF_PORT443" ||
             ig_ui_status warn "Публичный TCP/443" "$INSTALLER_PF_PORT443"
+        [ -z "$INSTALLER_PF_UDP443" ] ||
+            ig_ui_status warn "Публичный UDP/443" "$INSTALLER_PF_UDP443 · не конфликтует с TCP"
+        [ "$INSTALLER_PF_TCP8443" = "свободен" ] &&
+            ig_ui_status ok "Внутренний TCP/8443" "$INSTALLER_PF_TCP8443" ||
+            ig_ui_status warn "Внутренний TCP/8443" "$INSTALLER_PF_TCP8443"
+        [ -z "$INSTALLER_PF_UDP8443" ] ||
+            ig_ui_status warn "UDP/8443" "$INSTALLER_PF_UDP8443 · Hysteria может сосуществовать с TCP"
         [ -n "$INSTALLER_PF_RECOMMENDED_PORT" ] &&
             ig_ui_status ok "Порт для прокси" "$INSTALLER_PF_RECOMMENDED_PORT" ||
             ig_ui_status error "Порт для прокси" "нет свободного кандидата"
@@ -374,6 +424,7 @@ installer_preflight_show() {
             КОНФЛИКТ*) ig_ui_status error "Единый центр" "127.0.0.1:1990 · $INSTALLER_PF_HUB" ;;
             *) ig_ui_status ok "Единый центр" "127.0.0.1:1990 · $INSTALLER_PF_HUB" ;;
         esac
+        ig_ui_note "Сетевые службы: $INSTALLER_PF_NETWORK_SERVICES"
         ig_ui_note "Firewall: $INSTALLER_PF_FIREWALL · SELinux: $INSTALLER_PF_SELINUX"
         return
     fi
@@ -407,6 +458,10 @@ installer_preflight_show() {
     else
         installer_status_line warn "Порт 443" "$INSTALLER_PF_PORT443"
     fi
+    [ -z "$INSTALLER_PF_UDP443" ] || installer_status_line warn "UDP/443" "$INSTALLER_PF_UDP443 (не конфликтует с TCP)"
+    installer_status_line ok "TCP/8443" "$INSTALLER_PF_TCP8443"
+    [ -z "$INSTALLER_PF_UDP8443" ] || installer_status_line warn "UDP/8443" "$INSTALLER_PF_UDP8443 (не конфликтует с TCP)"
+    installer_status_line ok "Сетевые службы" "$INSTALLER_PF_NETWORK_SERVICES"
     if [ -n "$INSTALLER_PF_RECOMMENDED_PORT" ]; then
         installer_status_line ok "Порт для прокси" "$INSTALLER_PF_RECOMMENDED_PORT"
     else
@@ -426,6 +481,7 @@ installer_preflight_show() {
 }
 
 installer_preflight_run() {
+    local interactive="${1:-}"
     installer_preflight_collect
     type ig_ui_clear >/dev/null 2>&1 && ig_ui_clear
     if type ig_ui_logo >/dev/null 2>&1; then
@@ -436,6 +492,12 @@ installer_preflight_run() {
     if [ "$INSTALLER_PREFLIGHT_FATAL" -gt 0 ]; then
         log_error "Сервер пока не готов к безопасной установке. Исправьте пункты с ✗ и запустите мастер снова."
         return 1
+    fi
+    if [ "$interactive" = "interactive" ]; then
+        printf '\n  %sEnter — продолжить · 0 — назад%s ' "${DIM:-}" "${NC:-}" >&2
+        local answer=""
+        IFS= read -r answer < "${IG_UI_TTY:-/dev/stdin}" || answer=""
+        case "$answer" in 0|q|Q) return 10 ;; esac
     fi
     return 0
 }
@@ -459,6 +521,10 @@ installer_preflight_json() {
     printf '"public_ip":"%s",' "$(installer_json_escape "$INSTALLER_PF_IP")"
     printf '"port_80":"%s",' "$(installer_json_escape "$INSTALLER_PF_PORT80")"
     printf '"port_443":"%s",' "$(installer_json_escape "$INSTALLER_PF_PORT443")"
+    printf '"udp_443":"%s",' "$(installer_json_escape "${INSTALLER_PF_UDP443:-}")"
+    printf '"tcp_8443":"%s",' "$(installer_json_escape "${INSTALLER_PF_TCP8443:-}")"
+    printf '"udp_8443":"%s",' "$(installer_json_escape "${INSTALLER_PF_UDP8443:-}")"
+    printf '"network_services":"%s",' "$(installer_json_escape "${INSTALLER_PF_NETWORK_SERVICES:-}")"
     printf '"recommended_proxy_port":"%s",' "$(installer_json_escape "$INSTALLER_PF_RECOMMENDED_PORT")"
     printf '"admin_port":"%s",' "$(installer_json_escape "$INSTALLER_PF_ADMIN")"
     printf '"hub_port":"%s",' "$(installer_json_escape "$INSTALLER_PF_HUB")"
@@ -547,9 +613,33 @@ installer_local_global_ipv6() {
     ip -6 -o addr show scope global 2>/dev/null | awk '{print $4}' | cut -d/ -f1 | sort -fu
 }
 
+installer_domain_http_preflight() {
+    local cert_reused="${1:-0}" owner80
+    INSTALLER_DOMAIN_HTTP_LISTENER=1
+    owner80=$(installer_port_listener 80)
+    if [ -n "$owner80" ] && ! printf '%s' "$owner80" | grep -Eiq 'nginx'; then
+        if [ "$cert_reused" = "1" ]; then
+            INSTALLER_DOMAIN_HTTP_LISTENER=0
+            log_warning "TCP/80 занят другой службой: $(installer_trim_line "$owner80")."
+            log_dim "Готовый сертификат будет использован, а порт 80 и его служба останутся без изменений."
+            return 0
+        fi
+        log_error "TCP/80 занят не nginx: $(installer_trim_line "$owner80"). Новый webroot-сертификат получить безопасно нельзя."
+        return 1
+    fi
+    if [ -n "$owner80" ]; then
+        log_success "Порт 80 уже обслуживает nginx; мастер добавит отдельный server_name."
+    elif [ "$cert_reused" = "1" ]; then
+        log_dim "Порт 80 свободен; готовый сертификат будет использован без ACME-проверки."
+    else
+        log_success "Порт 80 свободен для проверки Let's Encrypt."
+    fi
+}
+
 installer_domain_preflight() {
     local domain="$1" server_ip records aaaa local_v6 owner80 caa public_records resolver record public_verified=0
     INSTALLER_DOMAIN_CERT_REUSED=0
+    INSTALLER_DOMAIN_HTTP_LISTENER=1
     validate_domain "$domain" || {
         log_error "Некорректный домен: $domain"
         return 1
@@ -627,19 +717,7 @@ installer_domain_preflight() {
         INSTALLER_DOMAIN_CERT_DIR=""
     fi
 
-    owner80=$(installer_port_listener 80)
-    if [ -n "$owner80" ] && ! printf '%s' "$owner80" | grep -Eiq 'nginx'; then
-        log_error "TCP/80 занят не nginx: $(installer_trim_line "$owner80"). Webroot-проверка Let's Encrypt небезопасна."
-        return 1
-    fi
-    if [ -n "$owner80" ]; then
-        log_success "Порт 80 уже обслуживает nginx; мастер добавит отдельный server_name."
-    elif [ "$INSTALLER_DOMAIN_CERT_REUSED" = "1" ]; then
-        log_dim "Порт 80 свободен; готовый сертификат будет использован без ACME-проверки."
-    else
-        log_success "Порт 80 свободен для проверки Let's Encrypt."
-    fi
-    return 0
+    installer_domain_http_preflight "$INSTALLER_DOMAIN_CERT_REUSED"
 }
 
 installer_choose_mode() {
@@ -648,7 +726,7 @@ installer_choose_mode() {
         ig_ui_logo "Публикация"
         ig_ui_stepper 3 "Роль" "Проверка" "Публикация" "Установка"
         ig_ui_heading "ШАГ 3 · ПУБЛИКАЦИЯ" "Как публиковать прокси?" \
-            "Сайт нужен только для HTTPS-маскировки и запасной кнопки подключения."
+            "Роль уже выбрана: $(installer_role_title "${DEPLOYMENT_ROLE:-standalone}"). Теперь независимо выбирается способ публикации."
         if [ "${DEPLOYMENT_ROLE:-standalone}" = "hub" ]; then
             ig_ui_status active "Свой домен и сайт" \
                 "Центру нужен HTTPS-адрес для безопасного подключения дополнительных узлов."
@@ -657,8 +735,8 @@ installer_choose_mode() {
             return 0
         fi
         ig_ui_select "Выберите режим" 2 \
-            "pro|Свой домен и сайт|HTTPS-витрина, сертификат Let's Encrypt и MTProxy.|Нужен DNS" \
-            "lite|Только прокси|Без nginx и сертификата. Подходит при занятом TCP/443.|Рекомендуется"
+            "pro|Свой домен и сайт|HTTPS-витрина, сертификат Let's Encrypt и MTProxy.|Сайт + HTTPS" \
+            "lite|Только прокси|Без nginx и сертификата; выбранная роль сервера не меняется.|Без сайта"
         return $?
     fi
     local choice
@@ -724,7 +802,7 @@ installer_choose_deployment_role() {
 }
 
 installer_show_apply_plan() {
-    local mode="$1" public_port="$2" domain="${3:-}" internal_port="${4:-}"
+    local mode="$1" public_port="$2" domain="${3:-}" internal_port="${4:-}" http_listener="${5:-1}"
     echo ""
     echo -e "  ${BOLD:-}План изменений${NC:-}"
     echo -e "  ${DIM:-}$(printf '─%.0s' {1..64})${NC:-}"
@@ -734,7 +812,11 @@ installer_show_apply_plan() {
     echo "  • Открыть telemt на TCP/${public_port}; занятые службы не перемещаются."
     if [ "$mode" = "pro" ]; then
         echo "  • Настроить домен ${domain}, сертификат Let's Encrypt и сайт."
-        echo "  • Добавить отдельный nginx server_name на TCP/80."
+        if [ "$http_listener" = "1" ]; then
+            echo "  • Добавить отдельный nginx server_name на TCP/80."
+        else
+            echo "  • Не трогать TCP/80: готовый сертификат и его обновление остаются у существующей службы."
+        fi
         echo "  • Сайт маскировки слушает только 127.0.0.1:${internal_port}."
         echo "  • При SELinux Enforcing точечно разрешить nginx TCP/${internal_port}."
     else

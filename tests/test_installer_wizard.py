@@ -110,6 +110,58 @@ installer_pick_internal_port 8443
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(result.stdout.strip(), "9443")
 
+    def test_udp_hysteria_does_not_block_same_tcp_port(self):
+        result = run_bash(
+            """
+installer_port_listener() { return 0; }
+installer_udp_port_listener() { printf 'UNCONN 0 0 0.0.0.0:8443 users:(("hysteria",pid=7))'; }
+installer_port_is_usable 8443
+"""
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_preflight_inventory_names_known_network_services(self):
+        result = run_bash(
+            """
+systemctl() {
+  [ "$1" = is-active ] || return 1
+  case "$3" in hysteria-server|x-ui) return 0 ;; *) return 1 ;; esac
+}
+installer_detect_network_services
+"""
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("Hysteria", result.stdout)
+        self.assertIn("3x-ui", result.stdout)
+
+    def test_existing_certificate_allows_foreign_port_80_without_claiming_it(self):
+        result = run_bash(
+            """
+installer_port_listener() { printf 'LISTEN 0 4096 0.0.0.0:80 users:(("caddy",pid=9))'; }
+log_warning() { :; }
+log_dim() { :; }
+log_error() { :; }
+log_success() { :; }
+installer_domain_http_preflight 1
+printf '%s\\n' "$INSTALLER_DOMAIN_HTTP_LISTENER"
+"""
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout.strip(), "0")
+
+    def test_new_certificate_rejects_foreign_port_80(self):
+        result = run_bash(
+            """
+installer_port_listener() { printf 'LISTEN 0 4096 0.0.0.0:80 users:(("caddy",pid=9))'; }
+log_warning() { :; }
+log_dim() { :; }
+log_error() { :; }
+log_success() { :; }
+installer_domain_http_preflight 0
+"""
+        )
+        self.assertNotEqual(result.returncode, 0)
+
     def test_reserved_local_service_ports_are_not_public_candidates(self):
         result = run_bash(
             """
@@ -181,6 +233,17 @@ installer_preflight_json
         self.assertIn('DEPLOYMENT_ROLE=""', install)
         self.assertIn("read -r -s -n 1 answer", ui)
         self.assertIn("Назад", ui)
+
+    def test_interactive_preflight_waits_and_zero_goes_back(self):
+        result = run_bash(
+            """
+installer_preflight_collect() { INSTALLER_PREFLIGHT_FATAL=0; }
+installer_preflight_show() { :; }
+printf '0\\n' | installer_preflight_run interactive
+"""
+        )
+        self.assertEqual(result.returncode, 10, result.stderr)
+        self.assertIn("Enter — продолжить", result.stderr)
 
     def test_operator_installation_is_russian_only(self):
         install = INSTALL.read_text(encoding="utf-8")
@@ -286,8 +349,10 @@ installer_preflight_json
         self.assertIn("igproxy_certificate_lineage_name", website)
         self.assertIn('certbot_args+=(--cert-name "$dedicated_name")', website)
         self.assertNotIn('--cert-name "$(basename "$matching_live_dir")"', website)
-        self.assertIn('generate_nginx_config "$domain" "$proxy_port" true "$cert_live_dir"', website)
+        self.assertIn('generate_nginx_config "$domain" "$proxy_port" true "$cert_live_dir" "$enable_http_listener"', website)
         self.assertIn('INSTALLER_DOMAIN_CERT_REUSED=1', WIZARD.read_text(encoding="utf-8"))
+        self.assertIn("INSTALLER_DOMAIN_HTTP_LISTENER=0", WIZARD.read_text(encoding="utf-8"))
+        self.assertIn("HTTP_SERVER_PLACEHOLDER", website)
         self.assertIn('INSTALLER_TX_CERT_NAME="${INSTALLER_DOMAIN_CERT_LINEAGE:-}"', INSTALL.read_text(encoding="utf-8"))
         self.assertIn('installer_firewall_check_ports "$public_port" || return', INSTALL.read_text(encoding="utf-8"))
 

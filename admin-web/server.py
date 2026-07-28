@@ -66,7 +66,7 @@ WEBSITE_ROOT = Path(os.getenv("GOTELEGRAM_WEBSITE_ROOT", "/var/www/gotelegram-si
 SITE_PRESETS_DIR = Path(os.getenv("GOTELEGRAM_SITE_PRESETS", "/opt/gotelegram/current/site-presets"))
 HOST = os.getenv("GOTELEGRAM_ADMIN_HOST", "127.0.0.1")
 PORT = int(os.getenv("GOTELEGRAM_ADMIN_PORT", "1984"))
-VERSION = "2.13.2"  # fallback only; live value read from config.json
+VERSION = "2.14.0"  # fallback only; live value read from config.json
 RUNTIME_COMMON_PATHS = (
     INSTALL_DIR / "current" / "lib" / "common.sh",
     Path(__file__).resolve().parents[1] / "lib" / "common.sh",
@@ -350,10 +350,17 @@ def remove_legacy_webapp_bridge(source: str) -> str:
     return LEGACY_WEBAPP_BRIDGE_RE.sub("", source)
 
 
+def telegram_proxy_deep_link(link: str) -> str:
+    parsed = urllib.parse.urlparse(str(link or ""))
+    if parsed.path.rstrip("/") == "/proxy" and parsed.query:
+        return f"tg://proxy?{parsed.query}"
+    return str(link or "")
+
+
 SITE_PRESETS = {
     "random-gallery": {
         "name": "Рандомный сайт",
-        "description": "При каждом открытии выбирается самостоятельная композиция со своим стилем.",
+        "description": "При каждом открытии выбирается одна из 30 самостоятельных композиций.",
         "source": "random-gallery",
         "layout": "auto",
     },
@@ -431,6 +438,35 @@ SITE_PRESETS = {
     },
 }
 
+for preset_id, name, description in (
+    ("observatory", "Ночная обсерватория", "Звёздный купол и телескоп дальних маршрутов."),
+    ("blueprint", "Бюро тихих мостов", "Синий инженерный чертёж запасного пролёта."),
+    ("cassette", "Студия магнитных дорог", "Ретро-кассета с дорогой на стороне B."),
+    ("metrocard", "Билетная касса", "Графичный билет с незаметной пересадкой."),
+    ("museum", "Музей незапертых рам", "Тёмная галерея и картина за пределами багета."),
+    ("weather", "Бюро попутного ветра", "Воздушная погодная панель из матового стекла."),
+    ("chess", "Клуб дальних ходов", "Контрастная шахматная доска с непрямым ходом."),
+    ("bakery", "Пекарня второго выхода", "Тёплая упаковочная бумага и ароматный маршрут."),
+    ("aquarium", "Аквариум тихих течений", "Глубокое окно с пузырями и свободным потоком."),
+    ("courier", "Служба обходной доставки", "Яркая транспортная этикетка для важной посылки."),
+    ("planetarium", "Малый планетарий", "Фиолетовый звёздный купол и новая орбита."),
+    ("switchboard", "Старая телефонная", "Медные гнёзда и соединение двух берегов."),
+    ("typewriter", "Бюро непрочитанных писем", "Машинописный лист с продолжением истории."),
+    ("harbor", "Гавань сигнальных флагов", "Морская панель с цветным сообщением."),
+    ("laboratory", "Лаборатория проницаемых стен", "Чистая лабораторная карточка и прозрачный опыт."),
+    ("calendar", "Календарь запасных дней", "Крупный отрывной лист с открытым завтра."),
+    ("vinyl", "Магазин круговых историй", "Яркий виниловый конверт и соседняя дорожка."),
+    ("constellation", "Атлас невидимых линий", "Ночная карта созвездий с золотым маршрутом."),
+    ("semaphore", "Сигнальная башня", "Индустриальная панель с оранжевым семафором."),
+    ("snowglobe", "Почта снежного шара", "Ледяная стеклянная сцена и светящийся путь."),
+):
+    SITE_PRESETS[f"story-{preset_id}"] = {
+        "name": name,
+        "description": description,
+        "source": "random-gallery",
+        "layout": preset_id,
+    }
+
 
 def site_settings_payload() -> dict[str, Any]:
     config = load_json(GOTELEGRAM_CONFIG, {}) or {}
@@ -503,6 +539,7 @@ def apply_site_preset(preset: str, key_name: str) -> dict[str, Any]:
         for page in stage.rglob("*.html"):
             rendered = (
                 page.read_text(encoding="utf-8")
+                .replace("__PROXY_TG_LINK__", telegram_proxy_deep_link(link))
                 .replace("__PROXY_LINK__", link)
                 .replace("__LAYOUT__", str(definition.get("layout") or "auto"))
             )
@@ -536,7 +573,10 @@ def apply_custom_site(html_source: str, key_name: str) -> dict[str, Any]:
     previous = WEBSITE_ROOT.parent / ".igproxy-site-previous"
     try:
         (stage / "index.html").write_text(
-            remove_legacy_webapp_bridge(source.replace("__PROXY_LINK__", link)),
+            remove_legacy_webapp_bridge(
+                source.replace("__PROXY_TG_LINK__", telegram_proxy_deep_link(link))
+                .replace("__PROXY_LINK__", link)
+            ),
             encoding="utf-8",
         )
         return _publish_site_stage(stage, "custom", key_name)
@@ -1362,7 +1402,7 @@ def health_payload(force: bool = False) -> dict[str, Any]:
             issues.append({
                 "level": "warn",
                 "title": f"Установлен telemt {version}",
-                "detail": "Для IGProxy 2.13.2 проверена версия 3.4.25.",
+                "detail": "Для IGProxy 2.14.0 проверена версия 3.4.25.",
                 "action": "Обновите ядро с резервной копией бинарника и конфига.",
             })
         if handshake_mss and not bulk_mss:

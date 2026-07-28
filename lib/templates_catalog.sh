@@ -623,7 +623,7 @@ IGPROXY_SITE_PRESETS_DIR="${IGPROXY_SITE_PRESETS_DIR:-$(dirname "$(dirname "$(re
 
 igproxy_site_preset_rows() {
     cat <<'EOF'
-random-gallery|Рандомный сайт|Одна из 10 самостоятельных витрин при каждом открытии|random-gallery|auto
+random-gallery|Рандомный сайт|Одна из 30 самостоятельных витрин при каждом открытии|random-gallery|auto
 story-editorial|Ночная редакция|Светлая газетная обложка с крупной типографикой|random-gallery|editorial
 story-transit|Лунное депо|Контрастное транспортное табло и лунный вагон|random-gallery|transit
 story-cartography|Картографы дождя|Бумажная карта, координаты и новая линия маршрута|random-gallery|cartography
@@ -634,6 +634,26 @@ story-tearoom|Чайная у перевала|Тёплая вывеска ст�
 story-beacon|Бумажный маяк|Морская сигнальная панель и геометричный луч|random-gallery|beacon
 story-poster|Оркестр обходных нот|Яркий музыкальный постер с ритмичными формами|random-gallery|poster
 story-playground|Сад воздушных троп|Игровая иллюстрация с улиткой и мягкими карточками|random-gallery|playground
+story-observatory|Ночная обсерватория|Звёздный купол и телескоп дальних маршрутов|random-gallery|observatory
+story-blueprint|Бюро тихих мостов|Синий инженерный чертёж запасного пролёта|random-gallery|blueprint
+story-cassette|Студия магнитных дорог|Ретро-кассета с дорогой на стороне B|random-gallery|cassette
+story-metrocard|Билетная касса|Графичный билет с незаметной пересадкой|random-gallery|metrocard
+story-museum|Музей незапертых рам|Тёмная галерея и картина за пределами багета|random-gallery|museum
+story-weather|Бюро попутного ветра|Воздушная погодная панель из матового стекла|random-gallery|weather
+story-chess|Клуб дальних ходов|Контрастная шахматная доска с непрямым ходом|random-gallery|chess
+story-bakery|Пекарня второго выхода|Тёплая упаковочная бумага и ароматный маршрут|random-gallery|bakery
+story-aquarium|Аквариум тихих течений|Глубокое окно с пузырями и свободным потоком|random-gallery|aquarium
+story-courier|Служба обходной доставки|Яркая транспортная этикетка для важной посылки|random-gallery|courier
+story-planetarium|Малый планетарий|Фиолетовый звёздный купол и новая орбита|random-gallery|planetarium
+story-switchboard|Старая телефонная|Медные гнёзда и соединение двух берегов|random-gallery|switchboard
+story-typewriter|Бюро непрочитанных писем|Машинописный лист с продолжением истории|random-gallery|typewriter
+story-harbor|Гавань сигнальных флагов|Морская панель с цветным сообщением|random-gallery|harbor
+story-laboratory|Лаборатория проницаемых стен|Чистая лабораторная карточка и прозрачный опыт|random-gallery|laboratory
+story-calendar|Календарь запасных дней|Крупный отрывной лист с открытым завтра|random-gallery|calendar
+story-vinyl|Магазин круговых историй|Яркий виниловый конверт и соседняя дорожка|random-gallery|vinyl
+story-constellation|Атлас невидимых линий|Ночная карта созвездий с золотым маршрутом|random-gallery|constellation
+story-semaphore|Сигнальная башня|Индустриальная панель с оранжевым семафором|random-gallery|semaphore
+story-snowglobe|Почта снежного шара|Ледяная стеклянная сцена и светящийся путь|random-gallery|snowglobe
 route-workshop|Маршрутная мастерская|Трёхмерная мастерская со светящимися маршрутами|route-workshop|auto
 glass-garden|Сад за стеклом|Светлая басня о хранителях дверей|glass-garden|auto
 open-library|Библиотека открытых окон|Ночная история о совах, ставнях и книгах-лодках|open-library|auto
@@ -724,8 +744,17 @@ import sys
 page = pathlib.Path(sys.argv[1])
 layout = sys.argv[2]
 proxy_link = open(3, encoding="utf-8").read().strip()
+tg_link = proxy_link
+for prefix in ("https://t.me/proxy?", "http://t.me/proxy?", "https://telegram.me/proxy?"):
+    if proxy_link.startswith(prefix):
+        tg_link = "tg://proxy?" + proxy_link.split("?", 1)[1]
+        break
 source = page.read_text(encoding="utf-8")
-source = source.replace("__PROXY_LINK__", proxy_link).replace("__LAYOUT__", layout)
+source = (
+    source.replace("__PROXY_TG_LINK__", tg_link)
+    .replace("__PROXY_LINK__", proxy_link)
+    .replace("__LAYOUT__", layout)
+)
 page.write_text(source, encoding="utf-8")
 ' "$page" "$layout" 3<<< "$proxy_link"; then
             log_error "Не удалось подготовить HTML встроенной витрины $preset_id."

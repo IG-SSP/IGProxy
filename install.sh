@@ -767,7 +767,14 @@ menu_install() {
         export DEPLOYMENT_ROLE
 
         if type installer_preflight_run >/dev/null 2>&1; then
-            installer_preflight_run || return
+            installer_preflight_run interactive
+            selection_status=$?
+            if [ "$selection_status" -eq 10 ]; then
+                [ "$role_locked" = "1" ] && return
+                DEPLOYMENT_ROLE=""
+                continue
+            fi
+            [ "$selection_status" -eq 0 ] || return
         fi
 
         # Дисклеймер и любые записи — только после полностью read-only preflight.
@@ -1071,7 +1078,8 @@ install_pro_mode() {
     echo -e "  Внутренний сайт:      ${CYAN}127.0.0.1:${nginx_internal_port}${NC}"
     echo -e "  $(t install_cfg_mode)      ${MAGENTA}Свой домен и сайт${NC}"
     echo ""
-    installer_show_apply_plan "pro" "$public_port" "$user_domain" "$nginx_internal_port"
+    installer_show_apply_plan "pro" "$public_port" "$user_domain" "$nginx_internal_port" \
+        "${INSTALLER_DOMAIN_HTTP_LISTENER:-1}"
 
     if [ "$lazy" = "1" ]; then
         log_info "$(t lazy_autoconfirm)"
@@ -1124,7 +1132,8 @@ key${i} = \"$(generate_hex 32)\""
         installer_transaction_rollback "не удалось подготовить встроенную витрину"
         return
     }
-    setup_pro_mode "$user_domain" "$template_dir" "$nginx_internal_port" "$ssl_email" "$public_port" || {
+    setup_pro_mode "$user_domain" "$template_dir" "$nginx_internal_port" "$ssl_email" "$public_port" \
+        "${INSTALLER_DOMAIN_HTTP_LISTENER:-1}" || {
         installer_transaction_rollback "не удалось настроить сайт или сертификат"
         return
     }

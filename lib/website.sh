@@ -44,6 +44,7 @@ generate_nginx_config() {
     local proxy_port="${2:-443}"
     local use_ssl="${3:-true}"
     local cert_live_dir="${4:-/etc/letsencrypt/live/$domain}"
+    local enable_http_listener="${5:-1}"
     local cert_name="${cert_live_dir##*/}"
     validate_domain "$domain" || {
         log_error "Некорректный домен для nginx: $domain"
@@ -72,22 +73,7 @@ generate_nginx_config() {
 # Pro: nginx на 127.0.0.1:8443 (внутренний), telemt на 0.0.0.0:443 (внешний)
 # Обычный браузер → :443 → telemt → 127.0.0.1:8443 → nginx (сайт)
 
-server {
-    listen 80;
-    listen [::]:80;
-    server_name DOMAIN_PLACEHOLDER;
-
-    # Let's Encrypt ACME challenge
-    location /.well-known/acme-challenge/ {
-        root /var/www/certbot;
-        allow all;
-    }
-
-    # Редирект на HTTPS
-    location / {
-        return 301 https://$server_name$request_uri;
-    }
-}
+HTTP_SERVER_PLACEHOLDER
 
 server {
     listen 127.0.0.1:SSL_PORT_PLACEHOLDER ssl http2;
@@ -140,8 +126,24 @@ HUB_LOCATION_PLACEHOLDER
 }
 EONGINX
 
-    local hub_location=""
+    local http_server="" hub_location=""
     local hub_limits_conf="/etc/nginx/conf.d/igproxy-hub-limits.conf"
+    if [ "$enable_http_listener" = "1" ]; then
+        http_server='server {
+    listen 80;
+    listen [::]:80;
+    server_name DOMAIN_PLACEHOLDER;
+
+    location /.well-known/acme-challenge/ {
+        root /var/www/certbot;
+        allow all;
+    }
+
+    location / {
+        return 301 https://$server_name$request_uri;
+    }
+}'
+    fi
     case "${DEPLOYMENT_ROLE:-standalone}" in
         hub|controller)
             mkdir -p "$(dirname "$hub_limits_conf")"
@@ -173,7 +175,8 @@ EOHUBLIMITS
             fi
             ;;
     esac
-    awk -v replacement="$hub_location" '
+    awk -v http="$http_server" -v replacement="$hub_location" '
+        $0 == "HTTP_SERVER_PLACEHOLDER" { print http; next }
         $0 == "HUB_LOCATION_PLACEHOLDER" { print replacement; next }
         { print }
     ' "$NGINX_SITE_CONF" > "${NGINX_SITE_CONF}.tmp" &&
@@ -264,6 +267,7 @@ obtain_ssl_certificate() {
     local domain="$1"
     local email="${2:-}"
     local cert_live_dir="" dedicated_name="" dedicated_dir=""
+    IGPROXY_CERT_WAS_REUSED=0
 
     if ! cert_live_dir=$(ssl_certificate_live_dir "$domain"); then
         log_info "Получение SSL сертификата для $domain..."
@@ -311,6 +315,7 @@ obtain_ssl_certificate() {
             cert_live_dir=$(ssl_certificate_live_dir "$domain" 2>/dev/null || true)
             if [ -n "$cert_live_dir" ]; then
                 log_success "SSL сертификат готов: $cert_live_dir"
+                IGPROXY_CERT_WAS_REUSED=0
                 return 0
             fi
             log_error "Certbot завершился успешно, но подходящий сертификат для $domain не найден."
@@ -324,6 +329,7 @@ obtain_ssl_certificate() {
             return 1
         fi
     else
+        IGPROXY_CERT_WAS_REUSED=1
         log_success "Использую готовый сертификат: $cert_live_dir"
         return 0
     fi
@@ -466,6 +472,7 @@ setup_pro_mode() {
     local proxy_port="${3:-443}"
     local email="${4:-}"
     local public_port="${5:-443}"
+    local enable_http_listener="${6:-1}"
     local cert_live_dir=""
 
     log_step "Настройка своего домена и сайта"
@@ -487,7 +494,7 @@ setup_pro_mode() {
     }
 
     # 5. Генерируем полный nginx конфиг с SSL
-    generate_nginx_config "$domain" "$proxy_port" true "$cert_live_dir" || return 1
+    generate_nginx_config "$domain" "$proxy_port" true "$cert_live_dir" "$enable_http_listener" || return 1
 
     # 6. Тестируем и перезапускаем nginx
     if nginx -t 2>/dev/null; then
@@ -500,7 +507,11 @@ setup_pro_mode() {
     fi
 
     # 7. Настраиваем авто-обновление SSL
-    setup_ssl_auto_renewal
+    if [ "${IGPROXY_CERT_WAS_REUSED:-0}" = "1" ] && [ "$enable_http_listener" != "1" ]; then
+        log_dim "Существующий сертификат и его механизм продления оставлены без изменений."
+    else
+        setup_ssl_auto_renewal
+    fi
 
     # 8. Показываем благодарности авторам шаблонов
     show_credits
