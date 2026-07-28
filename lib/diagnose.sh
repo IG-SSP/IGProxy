@@ -324,7 +324,7 @@ _diag_proxy_link() {
     dom=$(config_get domain 2>/dev/null); [ -z "$dom" ] && dom=$(config_get mask_host 2>/dev/null)
     [ -z "$dom" ] && dom=$(get_server_ip 2>/dev/null)
     hex=$(printf '%s' "$dom" | xxd -p | tr -d '\n')
-    printf 'tg://proxy?server=%s&port=%s&secret=ee%s%s' "$dom" "$port" "$sec" "$hex"
+    printf 'https://t.me/proxy?server=%s&port=%s&secret=ee%s%s' "$dom" "$port" "$sec" "$hex"
 }
 
 _diag_input_src() { if [ ! -t 0 ] && [ -r /dev/tty ]; then echo /dev/tty; else echo /dev/stdin; fi; }

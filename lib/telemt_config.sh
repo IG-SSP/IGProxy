@@ -571,7 +571,7 @@ select_port() {
     esac
 }
 
-# ── Генерация ссылки tg://proxy ──────────────────────────────────────────────
+# ── Генерация переносимой ссылки https://t.me/proxy ─────────────────────────
 generate_proxy_link() {
     local server="${1:-$(get_server_ip)}"
     local port="${2:-443}"
@@ -585,7 +585,26 @@ generate_proxy_link() {
         secret="ee${secret}${domain_hex}"
     fi
 
-    echo "tg://proxy?server=${server}&port=${port}&secret=${secret}"
+    echo "https://t.me/proxy?server=${server}&port=${port}&secret=${secret}"
+}
+
+# Сохраняем секретную ссылку в root-only файл: её можно забрать после мастера,
+# не прерывая установку Ctrl+C. В Termius выделение мышью также копирует текст.
+save_proxy_link_for_copy() {
+    local link="$1"
+    local link_file="${GOTELEGRAM_LINK_FILE:-/root/IGProxy-link.txt}"
+    local tmp
+
+    [ "$(id -u)" -eq 0 ] || return 0
+    tmp=$(mktemp "${link_file}.XXXXXX") || return 0
+    if printf '%s\n' "$link" > "$tmp"; then
+        chmod 600 "$tmp"
+        mv -f "$tmp" "$link_file"
+        echo -e "  ${DIM}Ссылка сохранена: ${link_file}${NC}"
+        echo -e "  ${DIM}В Termius выделите ссылку мышью — Ctrl+C нажимать не нужно.${NC}"
+    else
+        rm -f "$tmp"
+    fi
 }
 
 # ── Вывод информации о прокси ────────────────────────────────────────────────
@@ -633,6 +652,7 @@ show_proxy_info() {
     echo -e "  ${DIM}$(printf '─%.0s' {1..50})${NC}"
     echo -e "  ${WHITE}Ссылка:${NC}"
     echo -e "  ${GREEN}${link}${NC}"
+    save_proxy_link_for_copy "$link"
     echo ""
 
     # QR если доступен
@@ -649,7 +669,7 @@ show_proxy_info_pro() {
     local public_port="${3:-443}"
     local internal_port="${4:-8443}"
 
-    local link="tg://proxy?server=${domain}&port=${public_port}&secret=${faketls_secret}"
+    local link="https://t.me/proxy?server=${domain}&port=${public_port}&secret=${faketls_secret}"
 
     echo ""
     echo -e "  ${BOLD}${WHITE}✅ Прокси со своим доменом и сайтом настроен${NC}"
@@ -663,6 +683,7 @@ show_proxy_info_pro() {
     echo -e "  ${DIM}$(printf '─%.0s' {1..55})${NC}"
     echo -e "  ${WHITE}Ссылка для Telegram:${NC}"
     echo -e "  ${GREEN}${link}${NC}"
+    save_proxy_link_for_copy "$link"
     echo ""
     echo -e "  ${DIM}Провайдер видит: HTTPS-трафик к ${domain}:${public_port}${NC}"
     echo -e "  ${DIM}Telegram-клиент маскирует соединение под TLS${NC}"

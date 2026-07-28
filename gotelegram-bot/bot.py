@@ -110,7 +110,7 @@ def _read_gotelegram_version() -> str:
                 return str(_v)
     except Exception:
         pass
-    return "2.15.1"
+    return "2.15.2"
 
 
 GOTELEGRAM_VERSION = _read_gotelegram_version()
