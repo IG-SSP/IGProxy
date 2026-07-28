@@ -717,10 +717,7 @@ prepare_igproxy_site_preset() {
     }
 
     while IFS= read -r -d '' page; do
-        python3 - "$page" "$layout" 3<<< "$proxy_link" <<'PY' || {
-            log_error "Не удалось подготовить HTML встроенной витрины $preset_id."
-            return 1
-        }
+        if ! python3 -c '
 import pathlib
 import sys
 
@@ -730,7 +727,10 @@ proxy_link = open(3, encoding="utf-8").read().strip()
 source = page.read_text(encoding="utf-8")
 source = source.replace("__PROXY_LINK__", proxy_link).replace("__LAYOUT__", layout)
 page.write_text(source, encoding="utf-8")
-PY
+' "$page" "$layout" 3<<< "$proxy_link"; then
+            log_error "Не удалось подготовить HTML встроенной витрины $preset_id."
+            return 1
+        fi
     done < <(find "$output_dir" -type f -name '*.html' -print0)
     printf '%s\n' "$output_dir"
 }
