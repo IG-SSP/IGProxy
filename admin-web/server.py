@@ -66,14 +66,15 @@ WEBSITE_ROOT = Path(os.getenv("GOTELEGRAM_WEBSITE_ROOT", "/var/www/gotelegram-si
 SITE_PRESETS_DIR = Path(os.getenv("GOTELEGRAM_SITE_PRESETS", "/opt/gotelegram/current/site-presets"))
 HOST = os.getenv("GOTELEGRAM_ADMIN_HOST", "127.0.0.1")
 PORT = int(os.getenv("GOTELEGRAM_ADMIN_PORT", "1984"))
-VERSION = "2.14.0"  # fallback only; live value read from config.json
+VERSION = "2.15.0"  # fallback only; live value read from config.json
 RUNTIME_COMMON_PATHS = (
     INSTALL_DIR / "current" / "lib" / "common.sh",
     Path(__file__).resolve().parents[1] / "lib" / "common.sh",
 )
 USER_RE = re.compile(r"^[A-Za-z0-9_.-]{1,48}$")
 LANG_RE = re.compile(r"^(en|ru)$")
-SENSITIVE_CONFIG_KEYS = {"secret"}
+SENSITIVE_CONFIG_KEYS = {"secret", "proxy_sponsor_tag"}
+SPONSOR_TAG_RE = re.compile(r"^[0-9a-fA-F]{32}$")
 BACKUP_NAME_RE = re.compile(r"^[A-Za-z0-9_.-]+\.tar\.gz(\.(enc|gpg))?$")
 MAX_UNIQUE_IP_LIMIT = 1000000
 TELEMT_RESTART_DEBOUNCE_SECONDS = float(os.getenv("GOTELEGRAM_TELEMT_RESTART_DEBOUNCE", "8"))
@@ -209,12 +210,46 @@ def load_json(path: Path, fallback: Any = None) -> Any:
         return fallback
 
 
-def save_json(path: Path, data: Any, mode: int = 0o600) -> None:
+def atomic_write_bytes(path: Path, content: bytes, mode: int = 0o600) -> None:
+    """Durably replace a sensitive file without a readable creation window."""
     path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(path.suffix + ".tmp")
-    tmp.write_text(json.dumps(data, ensure_ascii=False, indent=4) + "\n", encoding="utf-8")
-    os.chmod(tmp, mode)
-    tmp.replace(path)
+    fd, raw_tmp = tempfile.mkstemp(prefix=f".{path.name}.", dir=str(path.parent))
+    tmp = Path(raw_tmp)
+    try:
+        os.fchmod(fd, mode)
+        with os.fdopen(fd, "wb") as handle:
+            fd = -1
+            handle.write(content)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(tmp, path)
+        try:
+            dir_fd = os.open(path.parent, os.O_RDONLY)
+            try:
+                os.fsync(dir_fd)
+            finally:
+                os.close(dir_fd)
+        except OSError:
+            pass
+    finally:
+        if fd >= 0:
+            os.close(fd)
+        try:
+            tmp.unlink()
+        except FileNotFoundError:
+            pass
+
+
+def atomic_write_text(path: Path, content: str, mode: int = 0o600) -> None:
+    atomic_write_bytes(path, content.encode("utf-8"), mode)
+
+
+def save_json(path: Path, data: Any, mode: int = 0o600) -> None:
+    atomic_write_text(
+        path,
+        json.dumps(data, ensure_ascii=False, indent=4) + "\n",
+        mode,
+    )
 
 
 def read_language(config: dict[str, Any] | None = None) -> str:
@@ -230,7 +265,10 @@ def read_language(config: dict[str, Any] | None = None) -> str:
 
 
 def public_config(config: dict[str, Any]) -> dict[str, Any]:
-    return {key: value for key, value in config.items() if key not in SENSITIVE_CONFIG_KEYS}
+    payload = {key: value for key, value in config.items() if key not in SENSITIVE_CONFIG_KEYS}
+    tag = str(config.get("proxy_sponsor_tag") or "")
+    payload["proxy_sponsor_configured"] = bool(SPONSOR_TAG_RE.fullmatch(tag))
+    return payload
 
 
 def appearance_payload(config: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -244,6 +282,8 @@ def appearance_payload(config: dict[str, Any] | None = None) -> dict[str, Any]:
         "sponsor_enabled": bool(config.get("sponsor_enabled", False)),
         "sponsor_name": sponsor_name or "Спонсорский канал",
         "sponsor_url": sponsor_url,
+        "proxy_sponsor_enabled": bool(config.get("proxy_sponsor_enabled", False)),
+        "proxy_sponsor_configured": bool(SPONSOR_TAG_RE.fullmatch(str(config.get("proxy_sponsor_tag") or ""))),
     }
 
 
@@ -479,6 +519,12 @@ def site_settings_payload() -> dict[str, Any]:
                 "id": key,
                 "name": value["name"],
                 "description": value["description"],
+                "layout": value.get("layout", key),
+                "kind": (
+                    "random" if key == "random-gallery"
+                    else "story" if str(key).startswith("story-")
+                    else "authored"
+                ),
                 "available": (
                     SITE_PRESETS_DIR / str(value.get("source") or key) / "index.html"
                 ).exists(),
@@ -788,10 +834,7 @@ def write_telemt_users(users: dict[str, str]) -> None:
         out.append("[access.users]")
         out.extend(rendered)
 
-    tmp = TELEMT_CONFIG.with_name(TELEMT_CONFIG.name + ".tmp")
-    tmp.write_text("\n".join(out).rstrip() + "\n", encoding="utf-8")
-    os.chmod(tmp, 0o600)
-    tmp.replace(TELEMT_CONFIG)
+    atomic_write_text(TELEMT_CONFIG, "\n".join(out).rstrip() + "\n")
 
 
 def write_toml_int_table(table: str, values: dict[str, int]) -> None:
@@ -823,14 +866,102 @@ def write_toml_int_table(table: str, values: dict[str, int]) -> None:
         out.append(header)
         out.extend(rendered)
 
-    tmp = TELEMT_CONFIG.with_name(TELEMT_CONFIG.name + ".tmp")
-    tmp.write_text("\n".join(out).rstrip() + "\n", encoding="utf-8")
-    os.chmod(tmp, 0o600)
-    tmp.replace(TELEMT_CONFIG)
+    atomic_write_text(TELEMT_CONFIG, "\n".join(out).rstrip() + "\n")
 
 
 def write_user_max_unique_ips(values: dict[str, int]) -> None:
     write_toml_int_table("access.user_max_unique_ips", values)
+
+
+def write_telemt_general(values: dict[str, str | bool | None]) -> None:
+    """Update selected [general] scalars without touching the rest of telemt.toml."""
+    TELEMT_CONFIG.parent.mkdir(parents=True, exist_ok=True)
+    lines = TELEMT_CONFIG.read_text(encoding="utf-8", errors="ignore").splitlines() if TELEMT_CONFIG.exists() else []
+    rendered: dict[str, str] = {}
+    for key, value in values.items():
+        if value is None or value == "":
+            continue
+        if isinstance(value, bool):
+            rendered[key] = "true" if value else "false"
+        else:
+            rendered[key] = json.dumps(str(value), ensure_ascii=False)
+
+    out: list[str] = []
+    in_general = False
+    found = False
+    written: set[str] = set()
+    for raw in lines:
+        stripped = raw.strip()
+        if stripped == "[general]":
+            found = True
+            in_general = True
+            out.append(raw)
+            continue
+        if in_general and stripped.startswith("["):
+            for key, value in rendered.items():
+                if key not in written:
+                    out.append(f"{key} = {value}")
+                    written.add(key)
+            in_general = False
+        if in_general:
+            match = re.match(r"^([A-Za-z0-9_]+)\s*=", stripped)
+            if match and match.group(1) in values:
+                key = match.group(1)
+                if key in rendered:
+                    out.append(f"{key} = {rendered[key]}")
+                    written.add(key)
+                continue
+        out.append(raw)
+
+    if in_general:
+        for key, value in rendered.items():
+            if key not in written:
+                out.append(f"{key} = {value}")
+                written.add(key)
+    if not found:
+        if out and out[-1].strip():
+            out.append("")
+        out.append("[general]")
+        out.extend(f"{key} = {value}" for key, value in rendered.items())
+
+    atomic_write_text(TELEMT_CONFIG, "\n".join(out).rstrip() + "\n")
+
+
+def read_telemt_general() -> dict[str, Any]:
+    """Read the small subset of [general] used by the settings UI."""
+    if not TELEMT_CONFIG.exists():
+        return {}
+    result: dict[str, Any] = {}
+    in_general = False
+    for raw in TELEMT_CONFIG.read_text(encoding="utf-8", errors="ignore").splitlines():
+        stripped = raw.strip()
+        if stripped == "[general]":
+            in_general = True
+            continue
+        if in_general and stripped.startswith("["):
+            break
+        if not in_general or not stripped or stripped.startswith("#"):
+            continue
+        match = re.match(r"^(ad_tag|use_middle_proxy)\s*=\s*(.+?)\s*(?:#.*)?$", stripped)
+        if not match:
+            continue
+        key, value = match.groups()
+        if value.lower() in {"true", "false"}:
+            result[key] = value.lower() == "true"
+        elif len(value) >= 2 and value[0] == value[-1] == '"':
+            try:
+                result[key] = json.loads(value)
+            except json.JSONDecodeError:
+                pass
+    return result
+
+
+def restore_telemt_config(snapshot: bytes | None) -> bool:
+    if snapshot is None:
+        TELEMT_CONFIG.unlink(missing_ok=True)
+    else:
+        atomic_write_bytes(TELEMT_CONFIG, snapshot)
+    return restart_service("telemt")
 
 
 def normalize_max_unique_ips(value: Any) -> int:
@@ -1402,7 +1533,7 @@ def health_payload(force: bool = False) -> dict[str, Any]:
             issues.append({
                 "level": "warn",
                 "title": f"Установлен telemt {version}",
-                "detail": "Для IGProxy 2.14.0 проверена версия 3.4.25.",
+                "detail": "Для IGProxy 2.15.0 проверена версия 3.4.25.",
                 "action": "Обновите ядро с резервной копией бинарника и конфига.",
             })
         if handshake_mss and not bulk_mss:
@@ -2056,6 +2187,11 @@ def runtime_version(config: dict[str, Any] | None = None) -> str:
 
 def overview_payload() -> dict[str, Any]:
     config = load_json(GOTELEGRAM_CONFIG, {}) or {}
+    telemt_general = read_telemt_general()
+    telemt_tag = str(telemt_general.get("ad_tag") or "").strip().lower()
+    if SPONSOR_TAG_RE.fullmatch(telemt_tag):
+        config["proxy_sponsor_enabled"] = True
+        config["proxy_sponsor_tag"] = telemt_tag
     language = read_language(config)
     users = read_user_records()
     current = load_json(CURRENT_STATS, {}) or {}
@@ -2399,9 +2535,6 @@ class AdminHandler(BaseHTTPRequestHandler):
             self.send_json({"ok": True, "data": lang_payload})
         elif path == "/api/settings/general":
             try:
-                network_dc_count = int(body.get("network_dc_count") or 1)
-                if network_dc_count < 1 or network_dc_count > 999:
-                    raise ValueError("network_dc_count must be between 1 and 999")
                 brand_name = str(body.get("brand_name") or "IGProxy").strip()
                 if len(brand_name) > 48:
                     raise ValueError("название должно быть не длиннее 48 символов")
@@ -2415,23 +2548,69 @@ class AdminHandler(BaseHTTPRequestHandler):
                 sponsor_enabled = bool(body.get("sponsor_enabled", False))
                 if sponsor_enabled and not sponsor_url:
                     raise ValueError("для включения спонсора укажите ссылку на канал")
-                with FileLock(CONFIG_LOCK_FILE):
-                    config = load_json(GOTELEGRAM_CONFIG, {}) or {}
-                    config["network_dc_count"] = network_dc_count
-                    config["brand_enabled"] = bool(body.get("brand_enabled", True))
-                    config["brand_name"] = brand_name or "IGProxy"
-                    config["sponsor_enabled"] = sponsor_enabled
-                    config["sponsor_name"] = sponsor_name or "Спонсорский канал"
-                    config["sponsor_url"] = sponsor_url
-                    config["updated_at"] = utc_now()
-                    save_json(GOTELEGRAM_CONFIG, config)
+                proxy_sponsor_enabled = bool(body.get("proxy_sponsor_enabled", False))
+                proxy_sponsor_tag = str(body.get("proxy_sponsor_tag") or "").strip().lower()
+                with FileLock(USER_LOCK_FILE):
+                    current_config = load_json(GOTELEGRAM_CONFIG, {}) or {}
+                    current_telemt = read_telemt_general()
+                    actual_tag = str(current_telemt.get("ad_tag") or "").strip().lower()
+                    if proxy_sponsor_enabled and not proxy_sponsor_tag:
+                        proxy_sponsor_tag = str(
+                            current_config.get("proxy_sponsor_tag")
+                            or actual_tag
+                            or ""
+                        ).strip().lower()
+                    if proxy_sponsor_enabled and not SPONSOR_TAG_RE.fullmatch(proxy_sponsor_tag):
+                        raise ValueError("tag от @MTProxybot должен содержать ровно 32 шестнадцатеричных символа")
+                    desired_tag = proxy_sponsor_tag if proxy_sponsor_enabled else ""
+                    sponsor_changed = (
+                        desired_tag != actual_tag
+                        or not bool(current_telemt.get("use_middle_proxy", False))
+                    )
+                    old_telemt = TELEMT_CONFIG.read_bytes() if TELEMT_CONFIG.exists() else None
+                    if sponsor_changed:
+                        write_telemt_general({
+                            "ad_tag": desired_tag or None,
+                            "use_middle_proxy": True,
+                        })
+                        if not restart_service("telemt"):
+                            if not restore_telemt_config(old_telemt):
+                                raise RuntimeError(
+                                    "telemt не запустился и после атомарного отката; "
+                                    "проверьте systemctl status telemt"
+                                )
+                            raise ValueError("telemt не принял sponsor tag; конфигурация восстановлена")
+                    try:
+                        with FileLock(CONFIG_LOCK_FILE):
+                            config = load_json(GOTELEGRAM_CONFIG, {}) or {}
+                            config.pop("network_dc_count", None)
+                            config["brand_enabled"] = bool(body.get("brand_enabled", True))
+                            config["brand_name"] = brand_name or "IGProxy"
+                            config["sponsor_enabled"] = sponsor_enabled
+                            config["sponsor_name"] = sponsor_name or "Спонсорский канал"
+                            config["sponsor_url"] = sponsor_url
+                            config["proxy_sponsor_enabled"] = proxy_sponsor_enabled
+                            config["proxy_sponsor_tag"] = desired_tag
+                            config["updated_at"] = utc_now()
+                            save_json(GOTELEGRAM_CONFIG, config)
+                    except Exception as exc:
+                        if sponsor_changed and not restore_telemt_config(old_telemt):
+                            raise RuntimeError(
+                                "настройки не сохранены, а telemt не запустился после отката"
+                            ) from exc
+                        raise RuntimeError(
+                            "настройки не сохранены"
+                            + ("; конфигурация telemt восстановлена" if sponsor_changed else "")
+                        ) from exc
             except (TypeError, ValueError) as exc:
                 self.send_error_json(400, str(exc))
+                return
+            except RuntimeError as exc:
+                self.send_error_json(500, str(exc))
                 return
             self.send_json({
                 "ok": True,
                 "data": {
-                    "network_dc_count": network_dc_count,
                     **appearance_payload(config),
                 },
             })
