@@ -3,7 +3,7 @@
 # Colors, logging, spinner, system helpers, v1 compat, i18n-aware
 
 # ── Version ───────────────────────────────────────────────────────────────────
-GOTELEGRAM_VERSION="2.15.4"
+GOTELEGRAM_VERSION="2.15.5"
 GOTELEGRAM_NAME="IGProxy"
 
 # ── Пути ──────────────────────────────────────────────────────────────────────
@@ -160,29 +160,6 @@ show_banner() {
         echo -e "  ${DIM}Anti-DPI • Fake TLS • TCP Splice • JA3/JA4${NC}"
     fi
     echo -e "${CYAN}${line}${NC}"
-    echo ""
-}
-
-# ── Credits ──────────────────────────────────────────────────────────────────
-show_credits() {
-    local line
-    line=$(printf '─%.0s' $(seq 1 60))
-    echo ""
-    echo -e "${MAGENTA}${line}${NC}"
-    echo -e "  ${BOLD}$(type t &>/dev/null && t credits_title || echo 'Credits')${NC}"
-    echo -e "${MAGENTA}${line}${NC}"
-    echo -e "  ${WHITE}telemt${NC} — MTProxy engine (Rust)"
-    echo -e "  ${DIM}github.com/telemt/telemt${NC}"
-    echo ""
-    echo -e "  ${WHITE}HTML5 UP${NC} — responsive HTML/CSS templates"
-    echo -e "  ${DIM}html5up.net • CC BY 3.0 • @ajlkn${NC}"
-    echo ""
-    echo -e "  ${WHITE}learning-zone${NC} — 150+ HTML5 templates"
-    echo -e "  ${DIM}github.com/learning-zone/website-templates${NC}"
-    echo ""
-    echo -e "  ${WHITE}Start Bootstrap${NC} — MIT license"
-    echo -e "  ${DIM}startbootstrap.com${NC}"
-    echo -e "${MAGENTA}${line}${NC}"
     echo ""
 }
 

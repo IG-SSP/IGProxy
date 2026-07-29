@@ -808,12 +808,16 @@ def create_cluster_pairing_code() -> Dict[str, Any]:
     if not IGPROXY_HUB_CLI.is_file():
         raise RuntimeError("Компонент центра IGProxy не установлен")
 
+    hub_env = os.environ.copy()
+    hub_env["IGPROXY_HUB_STATE"] = "/opt/gotelegram"
+    hub_env["GOTELEGRAM_CONFIG"] = str(GOTELEGRAM_CONFIG)
     result = subprocess.run(
         [sys.executable, str(IGPROXY_HUB_CLI), "create-code", "--ttl", "1800"],
         check=False,
         capture_output=True,
         text=True,
         timeout=8,
+        env=hub_env,
     )
     if result.returncode != 0:
         raise RuntimeError("Центр не смог создать код подключения")

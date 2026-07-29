@@ -980,9 +980,6 @@ install_lite_mode() {
     }
     [ "$INSTALLER_DEFER_COMMIT" = "1" ] || installer_transaction_commit
 
-    # Credits
-    show_credits
-
     # Result
     show_proxy_info
     log_success "$(tf install_done "$GOTELEGRAM_VERSION" "Только прокси")"

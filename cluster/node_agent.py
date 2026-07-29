@@ -3,11 +3,13 @@
 
 from __future__ import annotations
 
+import argparse
 import hashlib
 import json
 import os
 import socket
 import subprocess
+import sys
 import tempfile
 import time
 import urllib.error
@@ -28,6 +30,12 @@ class NoRedirectHandler(urllib.request.HTTPRedirectHandler):
 
 
 HTTP_OPENER = urllib.request.build_opener(NoRedirectHandler())
+
+
+class HubRequestError(RuntimeError):
+    def __init__(self, status: int, message: str):
+        super().__init__(message)
+        self.status = status
 
 
 def load_json(path: Path, default: Any) -> Any:
@@ -140,10 +148,20 @@ def request(config: dict[str, Any], endpoint: str, payload: dict[str, Any], toke
     raw = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
     req = urllib.request.Request(f"{base}/{endpoint.lstrip('/')}", raw, headers, method="POST")
     # Bearer must never follow a redirect to another origin.
-    with HTTP_OPENER.open(req, timeout=TIMEOUT) as response:
-        body = json.loads(response.read(MAX_RESPONSE))
+    try:
+        with HTTP_OPENER.open(req, timeout=TIMEOUT) as response:
+            body = json.loads(response.read(MAX_RESPONSE))
+    except urllib.error.HTTPError as exc:
+        message = f"hub returned HTTP {exc.code}"
+        try:
+            error_body = json.loads(exc.read(MAX_RESPONSE))
+            if isinstance(error_body, dict) and error_body.get("error"):
+                message = str(error_body["error"])
+        except (OSError, ValueError, json.JSONDecodeError):
+            pass
+        raise HubRequestError(int(exc.code), message) from exc
     if not body.get("ok"):
-        raise RuntimeError(str(body.get("error") or "hub rejected request"))
+        raise HubRequestError(0, str(body.get("error") or "hub rejected request"))
     return body.get("data") or {}
 
 
@@ -163,7 +181,7 @@ def enroll(config: dict[str, Any]) -> dict[str, Any]:
         config,
         "v1/enroll",
         {
-            "pairing_code": str(config.get("pairing_code") or ""),
+            "pairing_code": "".join(str(config.get("pairing_code") or "").split()),
             "install_id": config["install_id"],
             "label": str(config.get("label") or socket.gethostname()),
             "proxy_url": proxy_url(),
@@ -179,25 +197,29 @@ def enroll(config: dict[str, Any]) -> dict[str, Any]:
     return config
 
 
+def sync_once() -> dict[str, Any]:
+    config = load_json(CONFIG_PATH, {})
+    ensure_install_id(config)
+    if not config.get("node_token"):
+        config = enroll(config)
+    request(
+        config,
+        "v1/heartbeat",
+        {
+            "label": str(config.get("label") or socket.gethostname()),
+            "proxy_url": proxy_url(),
+            "status": status_payload(),
+        },
+        str(config.get("node_token") or ""),
+    )
+    return config
+
+
 def run() -> None:
     failures = 0
     while True:
-        config = load_json(CONFIG_PATH, {})
-        ensure_install_id(config)
         try:
-            if not config.get("node_token"):
-                config = enroll(config)
-                print(f"IGProxy node enrolled as {config.get('node_id')}", flush=True)
-            request(
-                config,
-                "v1/heartbeat",
-                {
-                    "label": str(config.get("label") or socket.gethostname()),
-                    "proxy_url": proxy_url(),
-                    "status": status_payload(),
-                },
-                str(config.get("node_token") or ""),
-            )
+            config = sync_once()
             failures = 0
             delay = max(15, min(int(config.get("heartbeat_interval") or 30), 300))
         except (OSError, ValueError, KeyError, RuntimeError, urllib.error.URLError) as exc:
@@ -207,5 +229,32 @@ def run() -> None:
         time.sleep(delay)
 
 
+def main() -> int:
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--once",
+        action="store_true",
+        help="perform enrollment/heartbeat once and exit",
+    )
+    args = parser.parse_args()
+    if not args.once:
+        run()
+        return 0
+    try:
+        config = sync_once()
+        print(f"IGProxy node connected as {config.get('node_id')}", flush=True)
+        return 0
+    except HubRequestError as exc:
+        print(f"IGProxy node rejected: {exc}", file=sys.stderr, flush=True)
+        return 10 if exc.status == 401 else 1
+    except (OSError, ValueError, KeyError, RuntimeError, urllib.error.URLError) as exc:
+        print(
+            f"IGProxy node connection failed: {type(exc).__name__}: {exc}",
+            file=sys.stderr,
+            flush=True,
+        )
+        return 1
+
+
 if __name__ == "__main__":
-    run()
+    raise SystemExit(main())
