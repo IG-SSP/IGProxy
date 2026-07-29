@@ -208,7 +208,9 @@ def create_enrollment_code(ttl: int = ENROLLMENT_TTL) -> tuple[str, int]:
 
 
 def enroll_node(payload: dict[str, Any]) -> dict[str, Any]:
-    pairing_code = str(payload.get("pairing_code") or "")
+    # Codes are commonly copied from Telegram. Ignore formatting whitespace
+    # added by the client while keeping the token itself exact.
+    pairing_code = re.sub(r"\s+", "", str(payload.get("pairing_code") or ""))
     label = clean_label(payload.get("label"))
     proxy_url = str(payload.get("proxy_url") or "").strip()
     if not is_proxy_url(proxy_url):

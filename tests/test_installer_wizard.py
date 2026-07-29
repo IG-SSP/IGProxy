@@ -319,6 +319,14 @@ printf '0\\n' | installer_preflight_run interactive
         self.assertIn("RuntimeDirectory=gotelegram", cluster)
         self.assertIn("ReadWritePaths=/opt/gotelegram /run/gotelegram", cluster)
 
+    def test_installer_does_not_interrupt_installation_with_credits_screen(self):
+        install = INSTALL.read_text(encoding="utf-8")
+        website = (ROOT / "lib" / "website.sh").read_text(encoding="utf-8")
+        common = (ROOT / "lib" / "common.sh").read_text(encoding="utf-8")
+        self.assertNotIn("show_credits", install)
+        self.assertNotIn("show_credits", website)
+        self.assertNotIn("show_credits()", common)
+
     def test_release_contains_cluster_components(self):
         release = (ROOT / "tools" / "build_release.py").read_text(encoding="utf-8")
         self.assertIn('"cluster"', release)

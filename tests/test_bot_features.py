@@ -136,6 +136,8 @@ class BotFeatureTests(unittest.TestCase):
         self.assertIn('"cluster_pairing_code": cb_cluster_pairing_code', source)
         self.assertIn("def create_cluster_pairing_code()", source)
         self.assertIn('"create-code", "--ttl", "1800"', source)
+        self.assertIn('hub_env["IGPROXY_HUB_STATE"] = "/opt/gotelegram"', source)
+        self.assertIn("env=hub_env", source)
         self.assertIn("Код действует <b>30 минут</b>", source)
         self.assertIn("await asyncio.to_thread(create_cluster_pairing_code)", source)
         self.assertNotIn("shell=True", source)

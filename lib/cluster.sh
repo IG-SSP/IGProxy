@@ -109,6 +109,8 @@ LockPersonality=true
 RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
 Environment=IGPROXY_HUB_HOST=127.0.0.1
 Environment=IGPROXY_HUB_PORT=$IGPROXY_HUB_PORT
+Environment=IGPROXY_HUB_STATE=/opt/gotelegram
+Environment=GOTELEGRAM_CONFIG=/opt/gotelegram/config.json
 
 [Install]
 WantedBy=multi-user.target
@@ -207,14 +209,21 @@ cluster_install_node_service() {
     esac
     hub_url="${hub_url%/}"
     label=$(printf '%s' "$label" | tr '\r\n\t' '   ' | sed -E 's/[[:space:]]+/ /g; s/^ //; s/ $//' | cut -c1-48)
+    pairing_code=$(printf '%s' "$pairing_code" | tr -d '[:space:]')
     [ -n "$label" ] || {
         log_error "Название узла не может быть пустым."
         return 1
     }
     [ -n "$pairing_code" ] || {
         log_error "Не указан одноразовый код подключения."
-        return 1
+        return 10
     }
+    if ! printf '%s' "$pairing_code" | grep -Eq '^[A-Za-z0-9_-]{32,128}$'; then
+        log_error "Код подключения имеет неверный формат."
+        log_dim "Скопируйте только сам код из основного IGProxy, без подписи и кавычек."
+        return 10
+    }
+    log_dim "Код распознан: ${#pairing_code} символа."
     public_ip=$(get_server_ip 2>/dev/null || true)
     install -d -m 700 "$IGPROXY_NODE_DIR" "$IGPROXY_NODE_STATE_DIR"
     install -m 700 "$source" "$IGPROXY_NODE_DIR/node_agent.py"
@@ -284,26 +293,35 @@ Environment=IGPROXY_NODE_CONFIG=$IGPROXY_NODE_STATE_DIR/node.json
 WantedBy=multi-user.target
 EOF
     systemctl daemon-reload
-    systemctl enable --now "$IGPROXY_NODE_SERVICE" >/dev/null 2>&1
-    local waited=0
-    while [ "$waited" -lt 30 ]; do
-        if jq -e '.node_token and (.node_token | length > 20)' \
-            "$IGPROXY_NODE_STATE_DIR/node.json" >/dev/null 2>&1; then
-            log_success "Узел зарегистрирован в едином центре."
-            log_dim "Регистрация выполнена исходящим HTTPS-запросом; входящий служебный порт не открывался."
-            return 0
-        fi
-        systemctl is-active --quiet "$IGPROXY_NODE_SERVICE" || break
-        sleep 2
-        waited=$((waited + 2))
-    done
-    log_error "Агент установлен, но центр не подтвердил регистрацию."
-    journalctl -u "$IGPROXY_NODE_SERVICE" -n 8 --no-pager 2>/dev/null || true
-    return 1
+
+    local enroll_output enroll_rc
+    if enroll_output=$(IGPROXY_NODE_CONFIG="$IGPROXY_NODE_STATE_DIR/node.json" \
+        "$python_bin" "$IGPROXY_NODE_DIR/node_agent.py" --once 2>&1); then
+        enroll_rc=0
+    else
+        enroll_rc=$?
+    fi
+    if [ "$enroll_rc" -eq 10 ]; then
+        log_error "Центр отклонил одноразовый код: он неверный, просрочен или уже использован."
+        log_dim "Создайте новый код в основном IGProxy и повторите ввод."
+        return 10
+    fi
+    if [ "$enroll_rc" -ne 0 ]; then
+        log_error "Не удалось связаться с центром: ${enroll_output:-неизвестная ошибка}"
+        return 1
+    fi
+
+    systemctl enable --now "$IGPROXY_NODE_SERVICE" >/dev/null 2>&1 || {
+        log_error "Узел зарегистрирован, но служба синхронизации не запустилась."
+        return 1
+    }
+    log_success "Узел зарегистрирован в едином центре."
+    log_dim "Регистрация выполнена исходящим HTTPS-запросом; входящий служебный порт не открывался."
+    return 0
 }
 
 cluster_configure_node_interactive() {
-    local hub_url label pairing_code default_label
+    local hub_url label pairing_code default_label result
     default_label=$(hostname 2>/dev/null || echo "Новый сервер")
     if type ig_ui_heading >/dev/null 2>&1; then
         ig_ui_heading "ШАГ 4 · ЕДИНАЯ СЕТЬ" "Подключение к центру" \
@@ -311,8 +329,17 @@ cluster_configure_node_interactive() {
     fi
     hub_url=$(cluster_prompt_line "HTTPS-адрес центра" "")
     label=$(cluster_prompt_line "Название кнопки сервера" "$default_label")
-    pairing_code=$(cluster_prompt_secret "Одноразовый код")
-    cluster_install_node_service "$hub_url" "$label" "$pairing_code"
+    while true; do
+        pairing_code=$(cluster_prompt_secret "Одноразовый код (0 — назад)")
+        [ "$pairing_code" = "0" ] && return 1
+        if cluster_install_node_service "$hub_url" "$label" "$pairing_code"; then
+            return 0
+        else
+            result=$?
+        fi
+        [ "$result" -eq 10 ] || return "$result"
+        echo ""
+    done
 }
 
 cluster_finalize_deployment_role() {

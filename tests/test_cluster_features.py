@@ -1,9 +1,12 @@
 import importlib.util
+import io
 import json
 import os
 import sys
 import tempfile
 import unittest
+import urllib.error
+from unittest import mock
 from pathlib import Path
 
 
@@ -80,6 +83,19 @@ class ClusterFeatureTests(unittest.TestCase):
                 }
             )
 
+    def test_enrollment_ignores_whitespace_added_while_copying_code(self):
+        code, _ = self.hub.create_enrollment_code(600)
+        decorated_code = f" \n{code[:12]}\t{code[12:]}\r\n"
+        result = self.hub.enroll_node(
+            {
+                "pairing_code": decorated_code,
+                "install_id": "copied-code",
+                "label": "Литва",
+                "proxy_url": "https://t.me/proxy?server=node.example&port=8443&secret=abcdef",
+            }
+        )
+        self.assertTrue(result["node_token"])
+
     def test_heartbeat_requires_token_and_updates_public_status(self):
         code, _ = self.hub.create_enrollment_code(600)
         proxy_url = "https://t.me/proxy?server=198.51.100.7&port=9443&secret=abcdef"
@@ -115,12 +131,43 @@ class ClusterFeatureTests(unittest.TestCase):
             handler.redirect_request(None, None, 302, "Found", {}, "https://evil.example/")
         )
 
+    def test_node_agent_exposes_hub_error_without_leaking_request(self):
+        spec = importlib.util.spec_from_file_location(
+            "igproxy_node_http_error_test", ROOT / "cluster" / "node_agent.py"
+        )
+        node = importlib.util.module_from_spec(spec)
+        assert spec and spec.loader
+        spec.loader.exec_module(node)
+        response = io.BytesIO(
+            b'{"ok":false,"error":"pairing code is invalid or expired"}'
+        )
+        error = urllib.error.HTTPError(
+            "https://hub.example/v1/enroll", 401, "Unauthorized", {}, response
+        )
+        with mock.patch.object(node.HTTP_OPENER, "open", side_effect=error):
+            with self.assertRaises(node.HubRequestError) as raised:
+                node.request(
+                    {"hub_url": "https://hub.example"},
+                    "v1/enroll",
+                    {"pairing_code": "not-logged"},
+                )
+        self.assertEqual(raised.exception.status, 401)
+        self.assertEqual(str(raised.exception), "pairing code is invalid or expired")
+
     def test_hub_installer_waits_for_loopback_health(self):
         source = (ROOT / "lib" / "cluster.sh").read_text(encoding="utf-8")
         self.assertIn('while [ "$waited" -lt 10 ]; do', source)
         self.assertIn('hub_ready=1', source)
         self.assertIn('systemctl is-active --quiet "$IGPROXY_HUB_SERVICE" || break', source)
         self.assertIn('if [ "$hub_ready" != "1" ]; then', source)
+        self.assertIn("Environment=IGPROXY_HUB_STATE=/opt/gotelegram", source)
+
+    def test_node_installer_checks_pairing_before_starting_service(self):
+        source = (ROOT / "lib" / "cluster.sh").read_text(encoding="utf-8")
+        self.assertIn('"$IGPROXY_NODE_DIR/node_agent.py" --once', source)
+        self.assertIn('return 10', source)
+        self.assertIn('while true; do', source)
+        self.assertIn("Центр отклонил одноразовый код", source)
 
 
 if __name__ == "__main__":

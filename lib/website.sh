@@ -620,9 +620,6 @@ setup_pro_mode() {
         setup_ssl_auto_renewal
     fi
 
-    # 8. Показываем благодарности авторам шаблонов
-    show_credits
-
     log_success "Сайт настроен: $(format_https_url "$domain" "$public_port")"
     return 0
 }
