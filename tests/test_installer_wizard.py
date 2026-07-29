@@ -516,13 +516,21 @@ printf '0\\n' | installer_preflight_run interactive
         self.assertNotIn("ufw allow ${port}/tcp >/dev/null", wizard)
         self.assertNotIn("firewall-cmd --permanent --add-port=${port}/tcp >/dev/null", wizard)
 
-    def test_telemt_3425_is_pinned_with_verified_download_and_split_mss(self):
+    def test_telemt_latest_is_default_with_verified_musl_fallback(self):
         common = (ROOT / "lib" / "common.sh").read_text(encoding="utf-8")
         telemt = (ROOT / "lib" / "telemt.sh").read_text(encoding="utf-8")
+        install = INSTALL.read_text(encoding="utf-8")
         config = (ROOT / "lib" / "telemt_config.sh").read_text(encoding="utf-8")
 
         self.assertIn('TELEMT_PINNED_VERSION="3.4.25"', common)
-        self.assertIn('${TELEMT_PINNED_VERSION:-3.4.25}', telemt)
+        self.assertIn('""|latest|recommended)', telemt)
+        self.assertIn('TELEMT_VERSION_PREF="latest"', install)
+        self.assertIn('bot_update_config_field telemt_version "latest"', install)
+        self.assertIn('local libc_flavor="${2:-gnu}"', telemt)
+        self.assertIn('"linux-${libc_flavor}"', telemt)
+        self.assertIn('download_telemt "$version" "musl" "0"', telemt)
+        self.assertIn("Пробую совместимую статическую musl-сборку", telemt)
+        self.assertIn('"$staged_bin" --version 2>&1', telemt)
         self.assertIn('"${url}.sha256"', telemt)
         self.assertIn('sha256sum "$tmp_file"', telemt)
         self.assertIn("mktemp -d /tmp/telemt-download.XXXXXX", telemt)
@@ -531,6 +539,29 @@ printf '0\\n' | installer_preflight_run interactive
         self.assertIn("wait_telemt_ready()", telemt)
         self.assertIn('local client_mss_bulk="1400"', config)
         self.assertIn('client_mss_bulk = \\"${client_mss_bulk}\\"', config)
+
+    def test_telemt_target_defaults_to_latest_but_preserves_explicit_pin(self):
+        telemt = (ROOT / "lib" / "telemt.sh").as_posix()
+        script = f"""
+TELEMT_BIN=/tmp/unused-telemt
+TELEMT_PINNED_VERSION=3.4.25
+TELEMT_VERSION_PREF=
+source {telemt!r}
+read_config_or_default() {{ printf '%s\\n' "${{CONFIG_PREF:-}}"; }}
+get_latest_telemt_version() {{ printf '9.9.9\\n'; }}
+CONFIG_PREF=
+telemt_target_version
+CONFIG_PREF=pinned
+telemt_target_version
+"""
+        result = subprocess.run(
+            ["bash", "-c", script],
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout.splitlines(), ["9.9.9", "3.4.25"])
 
 
 if __name__ == "__main__":
