@@ -731,13 +731,41 @@ installer_domain_preflight() {
     installer_domain_http_preflight "$INSTALLER_DOMAIN_CERT_REUSED"
 }
 
+INSTALLER_SELECTED_DOMAIN="${INSTALLER_SELECTED_DOMAIN:-}"
+
+installer_prompt_domain() {
+    local candidate=""
+    INSTALLER_SELECTED_DOMAIN=""
+    while true; do
+        echo -ne "  ${WHITE:-}Домен для сайта (0 — в меню):${NC:-} " >&2
+        if ! IFS= read -r candidate; then
+            return 10
+        fi
+        candidate=$(printf '%s' "$candidate" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')
+        [ "$candidate" = "0" ] && return 10
+        if [ -z "$candidate" ] || ! validate_domain "$candidate"; then
+            log_error "Некорректный домен: ${candidate:-<пусто>}"
+            log_dim "Введите только имя, например proxy.example.com — без https://, пути и порта."
+            echo ""
+            continue
+        fi
+        if installer_domain_preflight "$candidate"; then
+            INSTALLER_SELECTED_DOMAIN="$candidate"
+            return 0
+        fi
+        log_warning "Домен пока не прошёл проверку. Исправьте DNS или введите другой адрес."
+        log_dim "Мастер остаётся на этом шаге; уже работающие службы не изменялись."
+        echo ""
+    done
+}
+
 installer_choose_mode() {
     if type ig_ui_select >/dev/null 2>&1; then
         ig_ui_clear
         ig_ui_logo "Публикация"
         ig_ui_stepper 3 "Роль" "Проверка" "Публикация" "Установка"
         ig_ui_heading "ШАГ 3 · ПУБЛИКАЦИЯ" "Как публиковать прокси?" \
-            "Роль уже выбрана: $(installer_role_title "${DEPLOYMENT_ROLE:-standalone}"). Теперь независимо выбирается способ публикации."
+            "По умолчанию IGProxy устанавливает прокси вместе с доменом и HTTPS-сайтом."
         if [ "${DEPLOYMENT_ROLE:-standalone}" = "hub" ]; then
             ig_ui_status active "Свой домен и сайт" \
                 "Центру нужен HTTPS-адрес для безопасного подключения дополнительных узлов."
@@ -745,9 +773,9 @@ installer_choose_mode() {
             printf 'pro\n'
             return 0
         fi
-        ig_ui_select "Выберите режим" 2 \
-            "pro|Свой домен и сайт|HTTPS-витрина, сертификат Let's Encrypt и MTProxy.|Сайт + HTTPS" \
-            "lite|Только прокси|Без nginx и сертификата; выбранная роль сервера не меняется.|Без сайта"
+        ig_ui_select "Выберите режим" 1 \
+            "pro|Прокси + сайт + домен|MTProxy, HTTPS-витрина и сертификат Let's Encrypt.|Рекомендуется" \
+            "lite|Только прокси|Запасной вариант без nginx, домена и сертификата.|Без сайта"
         return $?
     fi
     local choice
@@ -758,14 +786,14 @@ installer_choose_mode() {
     fi
     echo "" >&2
     echo -e "  ${BOLD:-}Что установить?${NC:-}" >&2
-    echo -e "  ${CYAN:-}1)${NC:-} ${BOLD:-}Свой домен и сайт${NC:-}" >&2
+    echo -e "  ${CYAN:-}1)${NC:-} ${BOLD:-}Прокси + сайт + домен${NC:-} ${GREEN:-}(рекомендуется)${NC:-}" >&2
     echo -e "     ${DIM:-}Прокси маскируется под ваш HTTPS-сайт. Нужны готовые DNS-записи.${NC:-}" >&2
     echo -e "  ${CYAN:-}2)${NC:-} ${BOLD:-}Только прокси${NC:-}" >&2
     echo -e "     ${DIM:-}Без сайта и сертификата. Лучше для серверов с уже занятым 443.${NC:-}" >&2
     echo -e "  ${DIM:-}0) Отмена${NC:-}" >&2
-    echo -ne "  Выбор [2]: " >&2
+    echo -ne "  Выбор [1]: " >&2
     read -r choice
-    case "${choice:-2}" in
+    case "${choice:-1}" in
         1) printf 'pro\n' ;;
         2) printf 'lite\n' ;;
         0) return 10 ;;

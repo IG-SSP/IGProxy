@@ -235,6 +235,44 @@ installer_preflight_json
         self.assertEqual(result.stdout.strip(), "lite")
         self.assertIn("Что установить?", result.stderr)
 
+    def test_site_and_domain_mode_is_the_default(self):
+        result = run_bash("printf '\\n' | installer_choose_mode")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout.strip(), "pro")
+        self.assertIn("Выбор [1]", result.stderr)
+        self.assertIn("рекомендуется", result.stderr)
+        self.assertNotIn("install_confirm_proxy_site", INSTALL.read_text(encoding="utf-8"))
+
+    def test_domain_prompt_retries_format_and_dns_errors(self):
+        result = run_bash(
+            """
+validate_domain() {
+  [ "$1" = first.example ] || [ "$1" = ready.example ]
+}
+installer_domain_preflight() { [ "$1" = ready.example ]; }
+log_error() { printf 'ERROR:%s\\n' "$*" >&2; }
+log_warning() { printf 'WARN:%s\\n' "$*" >&2; }
+log_dim() { printf 'INFO:%s\\n' "$*" >&2; }
+installer_prompt_domain <<< $'https://wrong.example\\nFIRST.EXAMPLE\\nREADY.EXAMPLE'
+status=$?
+printf '%s:%s\\n' "$status" "$INSTALLER_SELECTED_DOMAIN"
+"""
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout.strip(), "0:ready.example")
+        self.assertIn("Некорректный домен", result.stderr)
+        self.assertIn("Домен пока не прошёл проверку", result.stderr)
+
+    def test_domain_prompt_zero_returns_without_preflight(self):
+        result = run_bash(
+            """
+validate_domain() { return 0; }
+installer_domain_preflight() { exit 99; }
+installer_prompt_domain <<< '0'
+"""
+        )
+        self.assertEqual(result.returncode, 10, result.stderr)
+
     def test_mode_zero_returns_to_previous_step(self):
         result = run_bash("printf '0\\n' | installer_choose_mode")
         self.assertEqual(result.returncode, 10, result.stderr)
