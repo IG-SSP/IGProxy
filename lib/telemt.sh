@@ -28,6 +28,7 @@ _telemt_releases_meta() {
 
 get_telemt_download_url() {
     local version="${1:-}"
+    local libc_flavor="${2:-gnu}"
     local api="$TELEMT_RELEASE_API"
     if [ -n "$version" ] && [ "$version" != "latest" ]; then
         api="https://api.github.com/repos/${TELEMT_GITHUB}/releases/tags/${version}"
@@ -47,11 +48,17 @@ get_telemt_download_url() {
         *)      arch_pattern="${arch}" ;;
     esac
 
+    case "$libc_flavor" in
+        gnu|musl) ;;
+        *) return 1 ;;
+    esac
+
     echo "$resp" | jq -r ".assets[].browser_download_url" 2>/dev/null \
         | grep -iE "$arch_pattern" \
         | grep -i "linux" \
         | grep -v "sha256" \
-        | grep "gnu" \
+        | grep -vi -- "-v3-" \
+        | grep -i -- "linux-${libc_flavor}" \
         | head -1
 }
 
@@ -69,25 +76,37 @@ is_telemt_installed() {
 }
 
 # Целевая версия ядра: из config.json telemt_version, иначе глобал TELEMT_VERSION_PREF,
-# иначе пин. "latest" -> резолвится в актуальный тег. Возвращает КОНКРЕТНЫЙ тег.
+# иначе последний стабильный релиз. Пин остаётся аварийным fallback.
 telemt_target_version() {
     local v
     v=$(read_config_or_default telemt_version "" 2>/dev/null)
     [ -z "$v" ] && v="${TELEMT_VERSION_PREF:-}"
     case "$v" in
-        ""|recommended|pinned) echo "${TELEMT_PINNED_VERSION:-3.4.25}" ;;
-        latest)                get_latest_telemt_version ;;
+        ""|latest|recommended)
+            get_latest_telemt_version 2>/dev/null || echo "${TELEMT_PINNED_VERSION:-3.4.25}"
+            ;;
+        pinned) echo "${TELEMT_PINNED_VERSION:-3.4.25}" ;;
         *)                     echo "$v" ;;
     esac
+}
+
+telemt_system_libc() {
+    if ldd --version 2>&1 | grep -qi musl; then
+        printf 'musl\n'
+    else
+        printf 'gnu\n'
+    fi
 }
 
 # ── Скачивание и установка ───────────────────────────────────────────────────
 download_telemt() {
     local version="${1:-$(telemt_target_version)}"
+    local libc_flavor="${2:-$(telemt_system_libc)}"
+    local allow_musl_fallback="${3:-1}"
     local url
-    url=$(get_telemt_download_url "$version")
+    url=$(get_telemt_download_url "$version" "$libc_flavor")
     if [ -z "$url" ]; then
-        log_error "Не найден бинарник telemt для архитектуры $(get_arch)"
+        log_error "Не найден ${libc_flavor}-бинарник telemt для архитектуры $(get_arch)"
         return 1
     fi
 
@@ -97,7 +116,7 @@ download_telemt() {
     tmp_file="$tmp_dir/asset"
     checksum_file="$tmp_dir/asset.sha256"
     extract_dir="$tmp_dir/extract"
-    log_info "Скачивание telemt ${version}: $url"
+    log_info "Скачивание telemt ${version} (${libc_flavor}): $url"
 
     if ! curl -L -s --max-time 120 -o "$tmp_file" "$url"; then
         log_error "Ошибка скачивания telemt"
@@ -180,11 +199,30 @@ download_telemt() {
         rm -rf -- "$tmp_dir"
         return 1
     }
-    if ! install -m 755 "$extracted" "$staged_bin" || \
-       ! "$staged_bin" --version 2>/dev/null | grep -Fq "$version"; then
-        log_error "Скачанный бинарник telemt не прошёл проверку запуска/версии"
+    local probe_output="" probe_rc=0
+    if ! install -m 755 "$extracted" "$staged_bin"; then
+        log_error "Не удалось подготовить бинарник telemt к запуску"
         rm -f -- "$staged_bin"
         rm -rf -- "$tmp_dir"
+        return 1
+    fi
+    if probe_output=$("$staged_bin" --version 2>&1); then
+        probe_rc=0
+    else
+        probe_rc=$?
+    fi
+    if [ "$probe_rc" -ne 0 ] || ! printf '%s\n' "$probe_output" | grep -Fq "$version"; then
+        probe_output=$(printf '%s' "${probe_output:-нет сообщения от загрузчика}" \
+            | tr '\r\n\t' '   ' | sed -E 's/[[:space:]]+/ /g' | cut -c1-320)
+        log_warning "Сборка telemt (${libc_flavor}) не запустилась: ${probe_output} (code: ${probe_rc})."
+        rm -f -- "$staged_bin"
+        rm -rf -- "$tmp_dir"
+        if [ "$libc_flavor" = "gnu" ] && [ "$allow_musl_fallback" = "1" ]; then
+            log_info "Пробую совместимую статическую musl-сборку telemt той же версии."
+            download_telemt "$version" "musl" "0"
+            return $?
+        fi
+        log_error "Скачанный бинарник telemt не прошёл проверку запуска/версии"
         return 1
     fi
     if [ -x "$TELEMT_BIN" ]; then

@@ -503,8 +503,8 @@ MaxFileSec=1day"
 }
 
 # ── Выбор версии ядра telemt ─────────────────────────────────────────────────
-# Дефолт — протестированный пин (TELEMT_PINNED_VERSION), а не latest, чтобы битый
-# свежий релиз ядра не ломал установки. Сохраняем выбор в config.json telemt_version.
+# Дефолт — последний стабильный релиз. Протестированный пин остаётся запасным
+# вариантом для ручного отката и недоступного GitHub API.
 choose_telemt_version() {
     local meta latest latest_meta pin_meta pin_d pin_f lat_d lat_f src ans v
     meta=$(_telemt_releases_meta 2>/dev/null || echo "")
@@ -521,28 +521,28 @@ choose_telemt_version() {
     [ -n "$cur" ] && [ "$cur" = "$latest" ] && m2="  ${GREEN}← установлена${NC}"
     src=""; if [ -t 0 ]; then src=/dev/stdin; elif [ -r /dev/tty ]; then src=/dev/tty; fi
     if [ -z "$src" ]; then
-        TELEMT_VERSION_PREF="${TELEMT_PINNED_VERSION}"
-        bot_update_config_field telemt_version "${TELEMT_PINNED_VERSION}" >/dev/null 2>&1 || true
+        TELEMT_VERSION_PREF="latest"
+        bot_update_config_field telemt_version "latest" >/dev/null 2>&1 || true
         return 0
     fi
     echo "" >&2
     echo -e "  ${BOLD}Версия ядра telemt${NC}" >&2
     echo -e "  ${DIM}Установлено сейчас: ${cur:-нет} · настройка: ${curpref:-рекомендованная}${NC}" >&2
-    echo -e "  ${GREEN}1)${NC} Рекомендованная — ${TELEMT_PINNED_VERSION}${pin_d:+ · $pin_d}${pin_f:+ · $pin_f} ${DIM}(протестирована)${NC}${m1}" >&2
-    echo -e "  ${GREEN}2)${NC} Последняя — ${latest}${lat_d:+ · $lat_d}${lat_f:+ · $lat_f}${m2}" >&2
+    echo -e "  ${GREEN}1)${NC} Последняя стабильная — ${latest}${lat_d:+ · $lat_d}${lat_f:+ · $lat_f} ${DIM}(рекомендуется)${NC}${m2}" >&2
+    echo -e "  ${GREEN}2)${NC} Проверенная запасная — ${TELEMT_PINNED_VERSION}${pin_d:+ · $pin_d}${pin_f:+ · $pin_f}${m1}" >&2
     echo -e "  ${GREEN}3)${NC} Выбрать из списка / ввести тег" >&2
     printf '  > ' >&2; read -r ans < "$src" || ans=1
     case "$ans" in
-        2) TELEMT_VERSION_PREF="latest"; bot_update_config_field telemt_version "latest" >/dev/null 2>&1 || true
-           log_info "Версия ядра: последняя (${latest}, ${lat_f:-?}, ${lat_d:-?})" >&2 ;;
+        2) TELEMT_VERSION_PREF="${TELEMT_PINNED_VERSION}"; bot_update_config_field telemt_version "${TELEMT_PINNED_VERSION}" >/dev/null 2>&1 || true
+           log_info "Версия ядра: запасная (${TELEMT_PINNED_VERSION}, ${pin_f:-?}, ${pin_d:-?})" >&2 ;;
         3) echo "  Доступные версии (новые сверху):" >&2
            printf '%s\n' "$meta" | head -12 | awk -F'|' '{printf "     %-9s · %s · %s\n",$1,$2,$3}' >&2
            printf '  Введите тег (напр. %s): ' "$TELEMT_PINNED_VERSION" >&2; read -r v < "$src" || v=""
            v=$(echo "$v" | tr -d '[:space:]')
            if [ -n "$v" ]; then TELEMT_VERSION_PREF="$v"; bot_update_config_field telemt_version "$v" >/dev/null 2>&1 || true; log_info "Версия ядра: ${v}" >&2
-           else TELEMT_VERSION_PREF="${TELEMT_PINNED_VERSION}"; bot_update_config_field telemt_version "${TELEMT_PINNED_VERSION}" >/dev/null 2>&1 || true; fi ;;
-        *) TELEMT_VERSION_PREF="${TELEMT_PINNED_VERSION}"; bot_update_config_field telemt_version "${TELEMT_PINNED_VERSION}" >/dev/null 2>&1 || true
-           log_info "Версия ядра: рекомендованная (${TELEMT_PINNED_VERSION})" >&2 ;;
+           else TELEMT_VERSION_PREF="latest"; bot_update_config_field telemt_version "latest" >/dev/null 2>&1 || true; fi ;;
+        *) TELEMT_VERSION_PREF="latest"; bot_update_config_field telemt_version "latest" >/dev/null 2>&1 || true
+           log_info "Версия ядра: последняя стабильная (${latest})" >&2 ;;
     esac
     return 0
 }
