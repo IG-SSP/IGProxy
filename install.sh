@@ -1016,17 +1016,20 @@ install_pro_mode() {
     else
         echo ""
     fi
-    echo -ne "  ${WHITE}$(t install_enter_domain)${NC} "
-    read -r user_domain
-    user_domain="$(printf '%s' "$user_domain" | tr -d '[:space:]')"
-    if [ -z "$user_domain" ] || ! validate_domain "$user_domain"; then
-        log_error "$(tf install_bad_domain "${user_domain:-<empty>}")"
-        return
-    fi
-
-    # Строгая DNS/ACME-проверка до установки пакетов и изменения nginx.
-    if type installer_domain_preflight >/dev/null 2>&1; then
-        installer_domain_preflight "$user_domain" || return
+    if type installer_prompt_domain >/dev/null 2>&1; then
+        if installer_prompt_domain; then
+            user_domain="$INSTALLER_SELECTED_DOMAIN"
+        else
+            return $?
+        fi
+    else
+        echo -ne "  ${WHITE}$(t install_enter_domain)${NC} "
+        read -r user_domain
+        user_domain="$(printf '%s' "$user_domain" | tr -d '[:space:]')"
+        if [ -z "$user_domain" ] || ! validate_domain "$user_domain"; then
+            log_error "$(tf install_bad_domain "${user_domain:-<empty>}")"
+            return
+        fi
     fi
     if [ "${INSTALLER_DOMAIN_CERT_REUSED:-0}" = "1" ]; then
         installer_firewall_check_ports "$public_port" || return
@@ -1096,12 +1099,6 @@ install_pro_mode() {
     echo ""
     installer_show_apply_plan "pro" "$public_port" "$user_domain" "$nginx_internal_port" \
         "${INSTALLER_DOMAIN_HTTP_LISTENER:-1}"
-
-    if [ "$lazy" = "1" ]; then
-        log_info "$(t lazy_autoconfirm)"
-    else
-        if ! confirm "$(t install_confirm_proxy_site)"; then return; fi
-    fi
 
     INSTALLER_TX_DOMAIN="$user_domain"
     INSTALLER_TX_CERT_NAME="${INSTALLER_DOMAIN_CERT_LINEAGE:-}"
@@ -2273,11 +2270,11 @@ installer_dry_run() {
     fi
 
     if [ "$selected_mode" = "pro" ]; then
-        echo ""
-        echo -ne "  Домен для сайта: "
-        read -r domain
-        domain=$(printf '%s' "$domain" | tr -d '[:space:]')
-        installer_domain_preflight "$domain" || return 1
+        if installer_prompt_domain; then
+            domain="$INSTALLER_SELECTED_DOMAIN"
+        else
+            return $?
+        fi
         internal_port=$(installer_pick_internal_port "$public_port") || {
             log_error "Не найден свободный локальный порт для сайта."
             return 1
