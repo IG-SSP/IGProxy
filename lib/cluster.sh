@@ -222,7 +222,7 @@ cluster_install_node_service() {
         log_error "Код подключения имеет неверный формат."
         log_dim "Скопируйте только сам код из основного IGProxy, без подписи и кавычек."
         return 10
-    }
+    fi
     log_dim "Код распознан: ${#pairing_code} символа."
     public_ip=$(get_server_ip 2>/dev/null || true)
     install -d -m 700 "$IGPROXY_NODE_DIR" "$IGPROXY_NODE_STATE_DIR"

@@ -16,7 +16,10 @@ jobs:
         with:
           python-version: "3.12"
       - name: Bash syntax
-        run: bash -n bootstrap.sh install.sh install_gotelegram_bot.sh lib/*.sh
+        run: |
+          for script in bootstrap.sh install.sh install_gotelegram_bot.sh lib/*.sh; do
+            bash -n "$script"
+          done
       - name: Python tests
         run: python -m unittest discover -s tests -v
       - name: Python syntax
